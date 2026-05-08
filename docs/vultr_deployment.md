@@ -6,8 +6,8 @@
 
 ```text
 Internet
-  -> Nginx :80/:443
-  -> 127.0.0.1:8765
+  -> Nginx :18080
+  -> 127.0.0.1:18765
   -> python -m scholarcheck.web
 ```
 
@@ -27,9 +27,11 @@ ScholarCheck 자체 웹 서버는 인증, TLS, 접근 제어를 직접 제공하
 
 ```bash
 sudo ufw allow OpenSSH
-sudo ufw allow 'Nginx Full'
+sudo ufw allow 18080/tcp
 sudo ufw enable
 ```
+
+여러 프로그램이 같은 서버 IP를 공유하므로 ScholarCheck는 기본 공개 포트를 `18080`으로 사용합니다. 내부 앱 포트는 `18765`이며 외부에 직접 열지 않습니다.
 
 ## 2. 자동 설치 스크립트
 
@@ -83,13 +85,26 @@ sudo systemctl restart scholarcheck
 서비스는 내부 주소에서만 실행됩니다.
 
 ```bash
-python -m scholarcheck.web --host 127.0.0.1 --port 8765
+python -m scholarcheck.web --host 127.0.0.1 --port 18765
+```
+
+포트 설정 파일:
+
+```text
+/etc/scholarcheck/scholarcheck.env
+```
+
+기본값:
+
+```text
+SCHOLARCHECK_HOST=127.0.0.1
+SCHOLARCHECK_PORT=18765
 ```
 
 서버 내부에서 확인:
 
 ```bash
-curl http://127.0.0.1:8765/
+curl http://127.0.0.1:18765/
 ```
 
 ## 4. Nginx 설정
@@ -117,6 +132,12 @@ sudo systemctl reload nginx
 ```
 
 Nginx 템플릿의 기본값도 `server_name 167.179.66.200;`으로 맞춰져 있습니다. 나중에 도메인을 연결하면 이 값을 실제 도메인으로 바꿉니다.
+
+공개 접속 주소 기본값:
+
+```text
+http://167.179.66.200:18080/
+```
 
 ## 5. HTTPS 적용
 
@@ -201,7 +222,7 @@ sudo systemctl restart scholarcheck
 서버 내부:
 
 ```bash
-curl -I http://127.0.0.1:8765/
+curl -I http://127.0.0.1:18765/
 sudo systemctl status scholarcheck
 ```
 
@@ -209,7 +230,7 @@ Nginx:
 
 ```bash
 sudo nginx -t
-curl -I http://167.179.66.200/
+curl -I http://167.179.66.200:18080/
 ```
 
 앱 기능:

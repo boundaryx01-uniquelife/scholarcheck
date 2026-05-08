@@ -9,7 +9,8 @@ User=scholarcheck
 Group=scholarcheck
 WorkingDirectory=/opt/scholarcheck/current
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/opt/scholarcheck/current/.venv/bin/python -m scholarcheck.web --host 127.0.0.1 --port 8765
+EnvironmentFile=-/etc/scholarcheck/scholarcheck.env
+ExecStart=/opt/scholarcheck/current/.venv/bin/python -m scholarcheck.web --host ${SCHOLARCHECK_HOST} --port ${SCHOLARCHECK_PORT}
 Restart=on-failure
 RestartSec=5
 

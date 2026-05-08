@@ -29,9 +29,17 @@ sudo "${APP_DIR}/.venv/bin/python" -m pip install -e "${APP_DIR}"
 sudo mkdir -p "${APP_DIR}/data/sessions" "${APP_DIR}/data/projects" "${APP_DIR}/data/backups" "${APP_DIR}/outputs"
 sudo chown -R "${APP_USER}:${APP_USER}" "${APP_DIR}"
 
+sudo mkdir -p /etc/scholarcheck
+sudo tee /etc/scholarcheck/scholarcheck.env >/dev/null <<'EOF'
+SCHOLARCHECK_HOST=127.0.0.1
+SCHOLARCHECK_PORT=18765
+EOF
+
 sudo cp "${APP_DIR}/deploy/vultr/scholarcheck.service" /etc/systemd/system/scholarcheck.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now scholarcheck
 
 echo "Install complete."
-echo "Next: copy deploy/vultr/nginx_scholarcheck.conf to /etc/nginx/sites-available/scholarcheck and set server_name."
+echo "ScholarCheck app listens on 127.0.0.1:18765."
+echo "Recommended public Nginx port is 18080: http://167.179.66.200:18080/"
+echo "Next: copy deploy/vultr/nginx_scholarcheck.conf to /etc/nginx/sites-available/scholarcheck."
