@@ -4,14 +4,20 @@ from pathlib import Path
 
 from scholarcheck.checklist import build_citation_checklist
 from scholarcheck.domestic import build_domestic_links
-from scholarcheck.manual_checks import add_manual_check, load_manual_checks
+from scholarcheck.manual_checks import (
+    add_manual_check,
+    backup_manual_checks,
+    load_manual_checks,
+    manual_checks_to_csv,
+    manual_checks_to_json,
+)
 from scholarcheck.models import DomesticManualCheck, PaperRecord, SearchQuery, UNKNOWN
 from scholarcheck.output import records_to_csv, records_to_json, save_records
 from scholarcheck.pipeline import build_query, deduplicate, search_papers
 from scholarcheck.scoring import filter_and_score
 from scholarcheck.sources import CrossrefSource
 from scholarcheck.verification import verify_doi_with_crossref
-from scholarcheck.web import SCREEN_UNKNOWN, _render_records_table, _screen, render_detail, render_home
+from scholarcheck.web import SCREEN_UNKNOWN, _render_records_table, _screen, render_detail, render_home, render_results
 
 
 def test_missing_doi_is_not_generated() -> None:
@@ -179,3 +185,48 @@ def test_web_includes_professor_guidance_copy() -> None:
     assert "교수님용 사용 안내" in home_html
     assert "교수님용 인용 전 안내" in detail_html
     assert "최종 인용 전에는 원문 페이지에서" in home_html
+
+
+def test_manual_domestic_checks_can_be_exported_and_backed_up(tmp_path: Path) -> None:
+    path = tmp_path / "manual_checks.json"
+    backup_dir = tmp_path / "backups"
+    check = DomesticManualCheck(
+        database_name="KCI",
+        search_keywords="ai education",
+        title="Manual paper",
+        doi=UNKNOWN,
+    )
+
+    add_manual_check(check, path=path)
+    checks = load_manual_checks(path)
+    csv_output = manual_checks_to_csv(checks)
+    json_output = manual_checks_to_json(checks)
+    backup_path = backup_manual_checks(path=path, backup_dir=backup_dir)
+
+    assert "database_name,search_keywords,title" in csv_output
+    assert "Manual paper" in csv_output
+    assert f'"doi": "{UNKNOWN}"' in json_output
+    assert backup_path.exists()
+    assert "Manual paper" in backup_path.read_text(encoding="utf-8")
+
+
+def test_web_results_include_manual_export_links() -> None:
+    html = render_results(
+        query=build_query("ai education"),
+        records=[],
+        domestic_links=[],
+        warnings=[],
+        suggestions=[],
+        raw_query="topic=ai+education",
+        manual_checks=[
+            DomesticManualCheck(
+                database_name="RISS",
+                search_keywords="ai education",
+                title="Manual paper",
+            )
+        ],
+    )
+
+    assert "/manual-checks.csv" in html
+    assert "/manual-checks.json" in html
+    assert "/manual-checks-backup" in html

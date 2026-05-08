@@ -7,7 +7,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from scholarcheck.checklist import build_citation_checklist
-from scholarcheck.manual_checks import add_manual_check, load_manual_checks
+from scholarcheck.manual_checks import (
+    add_manual_check,
+    backup_manual_checks,
+    load_manual_checks,
+    manual_checks_to_csv,
+    manual_checks_to_json,
+)
 from scholarcheck.models import DomesticManualCheck, DomesticSearchLink, PaperRecord, SearchQuery, UNKNOWN
 from scholarcheck.output import records_to_csv, records_to_json
 from scholarcheck.pipeline import build_query, parse_keyword_argument, search_papers
@@ -36,6 +42,9 @@ class ScholarCheckHandler(BaseHTTPRequestHandler):
             return
         if parsed.path in {"/search", "/download.csv", "/download.json"}:
             self._handle_search_like(parsed)
+            return
+        if parsed.path in {"/manual-checks.csv", "/manual-checks.json", "/manual-checks-backup"}:
+            self._handle_manual_check_download(parsed.path)
             return
         if parsed.path == "/detail":
             self._handle_detail(parsed)
@@ -106,6 +115,30 @@ class ScholarCheckHandler(BaseHTTPRequestHandler):
                 raw_query=parsed.query,
                 manual_checks=load_manual_checks(),
             )
+        )
+
+    def _handle_manual_check_download(self, path: str) -> None:
+        checks = load_manual_checks()
+        if path == "/manual-checks.csv":
+            self._send_download(
+                manual_checks_to_csv(checks),
+                "domestic_manual_checks.csv",
+                "text/csv; charset=utf-8",
+            )
+            return
+        if path == "/manual-checks.json":
+            self._send_download(
+                manual_checks_to_json(checks),
+                "domestic_manual_checks.json",
+                "application/json; charset=utf-8",
+            )
+            return
+
+        backup_path = backup_manual_checks()
+        self._send_download(
+            backup_path.read_text(encoding="utf-8"),
+            backup_path.name,
+            "application/json; charset=utf-8",
         )
 
     def _handle_detail(self, parsed) -> None:
@@ -225,6 +258,7 @@ def render_results(
             <p class="section-note">국내 DB는 자동 검증 논문 목록에 포함하지 않습니다. 검색 결과와 원문 접근 권한은 각 DB에서 직접 확인해야 합니다.</p>
             {_render_domestic_table(domestic_links)}
             {_render_manual_check_form(query, raw_query)}
+            {_render_manual_export_actions(manual_checks)}
             {_render_manual_checks(manual_checks)}
           </section>
         </main>
@@ -425,6 +459,18 @@ def _render_manual_check_form(query: SearchQuery, raw_query: str) -> str:
         <button type="submit">수동 확인 기록 저장</button>
       </form>
     </section>
+    """
+
+
+def _render_manual_export_actions(checks: list[DomesticManualCheck]) -> str:
+    count = len(checks)
+    return f"""
+    <div class="download-actions manual-downloads">
+      <a class="button-link secondary" href="/manual-checks.csv">수동 기록 CSV 내보내기</a>
+      <a class="button-link secondary" href="/manual-checks.json">수동 기록 JSON 내보내기</a>
+      <a class="button-link secondary" href="/manual-checks-backup">수동 기록 백업 파일 받기</a>
+      <span class="download-note">저장된 수동 기록 {count}건</span>
+    </div>
     """
 
 
