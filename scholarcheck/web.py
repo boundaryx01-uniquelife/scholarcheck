@@ -18,6 +18,12 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 SCREEN_UNKNOWN = "확인 불가"
 PDF_UNKNOWN = "확인 불가 / 기관접속 필요 가능성 있음"
+PROFESSOR_GUIDANCE_ITEMS = [
+    "ScholarCheck는 선행연구 후보를 빠르게 좁히는 보조 도구이며, 논문 존재 여부를 최종 보증하지 않습니다.",
+    "최종 인용 전에는 원문 페이지에서 제목, 저자, 학술지, 연도, DOI, 권호, 페이지를 직접 대조해야 합니다.",
+    "DOI, PDF, 오픈액세스 여부는 외부 API 응답 기준이며, 확인 불가는 임의로 보완하지 않은 값입니다.",
+    "국내 DB 결과는 자동 검증 목록이 아니므로 기관 접속 또는 DB 원문 페이지에서 별도로 확인해야 합니다.",
+]
 
 
 class ScholarCheckHandler(BaseHTTPRequestHandler):
@@ -170,6 +176,7 @@ def render_home(error: str = "") -> str:
             <li>사용자 화면에서는 누락값을 <code>{SCREEN_UNKNOWN}</code>로 표시합니다.</li>
           </ul>
         </section>
+        {_render_professor_guidance()}
         """,
     )
 
@@ -254,6 +261,7 @@ def render_detail(
             <h2>상세 정보</h2>
             {_render_detail_table(paper)}
           </section>
+          {_render_professor_guidance(compact=True)}
           <section class="result-section">
             <h2>인용 전 체크리스트</h2>
             {_render_checklist(checklist)}
@@ -341,6 +349,18 @@ def _render_records_table(records: list[PaperRecord], raw_query: str) -> str:
       <thead><tr><th>논문 제목</th><th>저자</th><th>연도</th><th>DOI</th><th>PDF</th><th>OA</th><th>인용</th><th>고전</th><th>점수</th><th>상세</th></tr></thead>
       <tbody>{''.join(rows)}</tbody>
     </table></div>
+    """
+
+
+def _render_professor_guidance(*, compact: bool = False) -> str:
+    heading = "교수님용 인용 전 안내" if compact else "교수님용 사용 안내"
+    items = "".join(f"<li>{_escape(item)}</li>" for item in PROFESSOR_GUIDANCE_ITEMS)
+    section_class = "result-section professor-guidance" if compact else "inner notes professor-guidance"
+    return f"""
+    <section class="{section_class}">
+      <h2>{heading}</h2>
+      <ul>{items}</ul>
+    </section>
     """
 
 

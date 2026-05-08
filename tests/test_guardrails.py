@@ -11,7 +11,7 @@ from scholarcheck.pipeline import build_query, deduplicate, search_papers
 from scholarcheck.scoring import filter_and_score
 from scholarcheck.sources import CrossrefSource
 from scholarcheck.verification import verify_doi_with_crossref
-from scholarcheck.web import SCREEN_UNKNOWN, _render_records_table, _screen
+from scholarcheck.web import SCREEN_UNKNOWN, _render_records_table, _screen, render_detail, render_home
 
 
 def test_missing_doi_is_not_generated() -> None:
@@ -165,3 +165,17 @@ def test_web_screen_displays_missing_values_as_check_unavailable() -> None:
     assert _screen(UNKNOWN) == SCREEN_UNKNOWN
     assert SCREEN_UNKNOWN in html
     assert ">UNKNOWN<" not in html
+
+
+def test_web_includes_professor_guidance_copy() -> None:
+    home_html = render_home()
+    detail_html = render_detail(
+        build_query("artificial intelligence education"),
+        PaperRecord(title="AI education sample"),
+        0,
+        "topic=artificial+intelligence+education",
+    )
+
+    assert "교수님용 사용 안내" in home_html
+    assert "교수님용 인용 전 안내" in detail_html
+    assert "최종 인용 전에는 원문 페이지에서" in home_html
