@@ -14,6 +14,15 @@ EXCEL_NOTICE = (
     "교수님 검토용 Excel 통합 파일입니다. 참고문헌은 후보안이며, 선행연구 매트릭스는 초안입니다. "
     "최종 논문 작성 전 원문 페이지에서 서지정보와 논문 내용을 직접 확인해야 합니다."
 )
+WARNING_NOTICE_MESSAGES = [
+    "ScholarCheck는 외부 API 메타데이터 기반 검증 보조 도구입니다.",
+    "최종 인용 전 원문 페이지 확인이 필요합니다.",
+    "참고문헌 후보는 자동 확정본이 아닙니다.",
+    "선행연구 매트릭스의 연구목적, 연구방법, 연구대상, 주요결과는 자동 추정하지 않습니다.",
+    "국내 DB는 자동 크롤링하지 않습니다.",
+    "국내 DB 수동 기록은 사용자가 직접 입력한 메모이며 자동 검증 결과가 아닙니다.",
+    "PDF 가능 여부는 API의 PDF URL 확인 기준입니다.",
+]
 
 
 def save_excel_workbook(
@@ -65,7 +74,8 @@ def _summary_rows(
     manual_checks: list[DomesticManualCheck],
 ) -> list[list[object]]:
     return [
-        ["ScholarCheck Excel Review Workbook"],
+        ["field", "value"],
+        ["Workbook", "ScholarCheck Excel Review Workbook"],
         ["Notice", EXCEL_NOTICE],
         ["Session ID", metadata.get("session_id", UNKNOWN)],
         ["Saved At", metadata.get("saved_at", UNKNOWN)],
@@ -172,8 +182,6 @@ def _matrix_rows(result: SearchResult) -> list[list[object]]:
                 row.verification_note,
             ]
         )
-    rows.append([])
-    rows.append(["Notice", MATRIX_NOTICE])
     return rows
 
 
@@ -213,11 +221,15 @@ def _manual_check_rows(checks: list[DomesticManualCheck]) -> list[list[object]]:
 
 def _warning_rows(result: SearchResult) -> list[list[object]]:
     rows = [["type", "message"]]
+    for message in WARNING_NOTICE_MESSAGES:
+        rows.append(["required_notice", message])
     for warning in result.warnings:
         rows.append(["api_warning", warning])
     for suggestion in result.relaxation_suggestions:
         rows.append(["relaxation_suggestion", suggestion])
-    rows.append(["notice", EXCEL_NOTICE])
+    rows.append(["excel_notice", EXCEL_NOTICE])
+    rows.append(["matrix_notice", MATRIX_NOTICE])
+    rows.append(["citation_notice", CITATION_NOTICE])
     return rows
 
 
@@ -284,7 +296,7 @@ def _styles_xml() -> str:
 <fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>
 <borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>
 <cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>
-<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"/></cellXfs>
+<cellXfs count="3"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="0" borderId="0" xfId="0" applyFont="1"><alignment wrapText="1"/></xf><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0" applyAlignment="1"><alignment wrapText="1" vertical="top"/></xf></cellXfs>
 <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>'''
 
@@ -294,20 +306,41 @@ def _worksheet_xml(rows: list[list[object]]) -> str:
     for row_index, row in enumerate(rows, start=1):
         cells = "".join(_cell_xml(row_index, col_index, value, row_index == 1) for col_index, value in enumerate(row, start=1))
         row_xml.append(f'<row r="{row_index}">{cells}</row>')
+    max_col = max((len(row) for row in rows), default=1)
+    max_row = max(len(rows), 1)
+    cols = _column_widths_xml(rows, max_col)
+    filter_ref = f"A1:{_column_name(max_col)}{max_row}"
     return f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
 <sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews>
+{cols}
 <sheetData>{''.join(row_xml)}</sheetData>
+<autoFilter ref="{filter_ref}"/>
 </worksheet>'''
 
 
 def _cell_xml(row_index: int, col_index: int, value: object, header: bool) -> str:
     cell_ref = f"{_column_name(col_index)}{row_index}"
-    style = ' s="1"' if header else ""
+    style = ' s="1"' if header else ' s="2"'
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         return f'<c r="{cell_ref}"{style}><v>{value}</v></c>'
     text = _xml("" if value is None else str(value))
     return f'<c r="{cell_ref}" t="inlineStr"{style}><is><t>{text}</t></is></c>'
+
+
+def _column_widths_xml(rows: list[list[object]], max_col: int) -> str:
+    widths = []
+    for col_index in range(1, max_col + 1):
+        max_length = 8
+        for row in rows:
+            if col_index > len(row):
+                continue
+            text = "" if row[col_index - 1] is None else str(row[col_index - 1])
+            longest_line = max((len(part) for part in text.splitlines()), default=0)
+            max_length = max(max_length, min(longest_line, 80))
+        width = min(max(max_length + 2, 10), 60)
+        widths.append(f'<col min="{col_index}" max="{col_index}" width="{width}" customWidth="1"/>')
+    return f"<cols>{''.join(widths)}</cols>"
 
 
 def _column_name(index: int) -> str:

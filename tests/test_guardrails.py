@@ -427,8 +427,11 @@ def test_excel_workbook_contains_separate_review_sheets_and_guardrails(tmp_path:
     with zipfile.ZipFile(output_path) as workbook:
         names = set(workbook.namelist())
         workbook_xml = workbook.read("xl/workbook.xml").decode("utf-8")
+        styles_xml = workbook.read("xl/styles.xml").decode("utf-8")
+        verified_xml = workbook.read("xl/worksheets/sheet2.xml").decode("utf-8")
         matrix_xml = workbook.read("xl/worksheets/sheet4.xml").decode("utf-8")
         manual_xml = workbook.read("xl/worksheets/sheet6.xml").decode("utf-8")
+        warnings_xml = workbook.read("xl/worksheets/sheet7.xml").decode("utf-8")
 
     assert "[Content_Types].xml" in names
     assert "Verified Papers" in workbook_xml
@@ -439,6 +442,12 @@ def test_excel_workbook_contains_separate_review_sheets_and_guardrails(tmp_path:
     assert NEEDS_REVIEW in matrix_xml
     assert UNKNOWN in matrix_xml
     assert "Manual domestic paper" in manual_xml
+    assert "<autoFilter ref=" in verified_xml
+    assert "<cols>" in verified_xml
+    assert 'state="frozen"' in verified_xml
+    assert 'wrapText="1"' in styles_xml
+    assert "최종 인용 전 원문 페이지 확인이 필요합니다." in warnings_xml
+    assert "국내 DB는 자동 크롤링하지 않습니다." in warnings_xml
 
 
 def test_excel_workbook_bytes_are_valid_xlsx_zip() -> None:
