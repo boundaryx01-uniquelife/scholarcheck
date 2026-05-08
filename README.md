@@ -78,6 +78,20 @@ RISS / KCI / DBpia / KISS / e-Article 검색 링크가 별도 표시됩니다.
 4. `computational thinking primary school`
 5. `AI literacy curriculum`
 
+## DOI 재검증 상태값
+
+ScholarCheck의 DOI 재검증은 `scholarcheck/verification.py`의 `verify_doi_with_crossref(paper)`가 반환하는 상태값을 사용합니다. 현재 실제 코드에서 사용하는 값은 다음과 같습니다.
+
+| 상태값 | 의미 | 처리 원칙 |
+| --- | --- | --- |
+| `verified` | 현재 논문 DOI와 Crossref 조회 DOI가 일치함 | Crossref 메타데이터를 확인한 것으로 표시하되, 최종 인용 전 원문 페이지 대조는 필요 |
+| `mismatch` | Crossref에서 DOI가 조회되었지만 현재 논문 DOI와 다름 | 현재 결과와 Crossref 결과가 다를 수 있으므로 원문 페이지와 DOI를 직접 확인 |
+| `missing` | 현재 논문에 DOI가 없음 | DOI를 새로 만들지 않고 재검증을 수행하지 않음 |
+| `not_found` | Crossref 응답에서 DOI 메타데이터 또는 DOI 값을 확인하지 못함 | DOI를 임의 생성하지 않고 확인 실패로 취급 |
+| `error` | Crossref API 오류 또는 네트워크 문제로 확인 실패 | 검색 결과를 유지하되 DOI 재검증 결과는 실패로 표시 |
+
+참고: `VERIFIED`, `PARTIAL_MATCH`, `MISMATCH`, `NO_DOI`, `CHECK_FAILED` 같은 대문자 상태명은 현재 코드의 반환값이 아닙니다. 사용자 화면과 저장 데이터에서는 위 소문자 상태값을 기준으로 해석합니다.
+
 ## 웹 UI 실행
 
 ```powershell
