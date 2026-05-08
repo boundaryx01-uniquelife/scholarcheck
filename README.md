@@ -237,3 +237,10 @@ Project pages can generate an integrated HTML report and an integrated Excel wor
 The export combines verified paper rows across sessions, but it does not modify the original session JSON files and does not delete duplicate papers. Possible duplicates are shown only as `duplicate_candidate`.
 
 Missing session files are listed as missing references. ScholarCheck does not create fake sessions, papers, DOI values, authors, venues, or links to fill gaps. Domestic DB manual check records remain separate from the automated overseas API result list.
+
+## Release documentation
+
+- [User Guide](docs/user_guide.md): 실행 방법, 추천 사용 흐름, 결과 해석, 제한 사항
+- [Architecture](docs/architecture.md): 주요 모듈, 데이터 경계, 저장 구조, 실패 처리
+- [Development History](docs/development_history.md): MVP 단계별 변경 이력
+- [Release Checklist](docs/release_checklist.md): 릴리즈 전 검증 항목
