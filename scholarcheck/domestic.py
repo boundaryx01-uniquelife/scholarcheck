@@ -50,6 +50,9 @@ def build_domestic_links(query: SearchQuery) -> list[DomesticSearchLink]:
 
 
 def build_domestic_keyword_text(query: SearchQuery) -> str:
+    keywords = [*query.required_keywords, *query.helpful_keywords]
+    if keywords:
+        return " ".join(dict.fromkeys(keywords))
     if query.keywords:
         return " ".join(query.keywords)
     return query.topic

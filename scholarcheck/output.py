@@ -19,10 +19,13 @@ FIELDNAMES = [
     "pdf_available",
     "pdf_url",
     "region",
+    "citation_count",
+    "classic_highly_cited",
     "relevance_score",
     "recency_score",
     "usability_score",
     "total_score",
+    "ranking_notes",
     "caution",
     "source_api",
     "verified_fields",
@@ -48,18 +51,19 @@ def print_table(records: list[PaperRecord]) -> None:
         rows.append(
             [
                 str(index),
-                _trim(record.title, 46),
-                _trim(record.authors_display, 28),
+                _trim(record.title, 42),
+                _trim(record.authors_display, 24),
                 record.year_display,
-                _trim(record.venue, 24),
                 record.doi,
                 "Y" if record.pdf_available else "N",
-                record.region,
+                record.citation_display,
+                "Y" if record.classic_highly_cited else "N",
                 f"{record.total_score:.2f}",
+                _trim("; ".join(record.ranking_notes), 38),
             ]
         )
 
-    headers = ["#", "Title", "Authors", "Year", "Venue", "DOI", "PDF", "Region", "Score"]
+    headers = ["#", "Title", "Authors", "Year", "DOI", "PDF", "Cites", "Classic", "Score", "Why"]
     widths = [
         max(len(str(row[column])) for row in [headers, *rows])
         for column in range(len(headers))
@@ -69,6 +73,14 @@ def print_table(records: list[PaperRecord]) -> None:
     print(_format_row(["-" * width for width in widths], widths))
     for row in rows:
         print(_format_row(row, widths))
+
+
+def print_relaxation_suggestions(suggestions: list[str]) -> None:
+    if not suggestions:
+        return
+    print("검색 조건 완화 제안")
+    for suggestion in suggestions:
+        print(f"- {suggestion}")
 
 
 def print_domestic_links(links: list[DomesticSearchLink]) -> None:
@@ -102,15 +114,18 @@ def save_records(
     records: list[PaperRecord],
     path: Path,
     domestic_links: list[DomesticSearchLink] | None = None,
+    relaxation_suggestions: list[str] | None = None,
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.suffix.lower() == ".json":
-        _save_json(records, domestic_links or [], path)
+        _save_json(records, domestic_links or [], relaxation_suggestions or [], path)
         return path
     if path.suffix.lower() == ".csv":
         _save_csv(records, path)
         if domestic_links is not None:
             _save_domestic_csv(domestic_links, _domestic_csv_path(path))
+        if relaxation_suggestions:
+            _save_suggestions_txt(relaxation_suggestions, _suggestions_txt_path(path))
         return path
     raise ValueError("Output path must end with .csv or .json")
 
@@ -123,7 +138,12 @@ def _save_csv(records: list[PaperRecord], path: Path) -> None:
             writer.writerow(_record_to_row(record))
 
 
-def _save_json(records: list[PaperRecord], domestic_links: list[DomesticSearchLink], path: Path) -> None:
+def _save_json(
+    records: list[PaperRecord],
+    domestic_links: list[DomesticSearchLink],
+    relaxation_suggestions: list[str],
+    path: Path,
+) -> None:
     verified_records = []
     for record in records:
         data = asdict(record)
@@ -132,6 +152,7 @@ def _save_json(records: list[PaperRecord], domestic_links: list[DomesticSearchLi
 
     payload = {
         "verified_records": verified_records,
+        "search_condition_relaxation_suggestions": relaxation_suggestions,
         "domestic_db_direct_check_required": [asdict(link) for link in domestic_links],
     }
 
@@ -149,6 +170,10 @@ def _save_domestic_csv(links: list[DomesticSearchLink], path: Path) -> None:
             writer.writerow(asdict(link))
 
 
+def _save_suggestions_txt(suggestions: list[str], path: Path) -> None:
+    path.write_text("\n".join(f"- {suggestion}" for suggestion in suggestions), encoding="utf-8")
+
+
 def _record_to_row(record: PaperRecord) -> dict[str, str | float | bool]:
     return {
         "title": record.title,
@@ -161,10 +186,13 @@ def _record_to_row(record: PaperRecord) -> dict[str, str | float | bool]:
         "pdf_available": record.pdf_available,
         "pdf_url": record.pdf_url,
         "region": record.region,
+        "citation_count": record.citation_display,
+        "classic_highly_cited": record.classic_highly_cited,
         "relevance_score": record.relevance_score,
         "recency_score": record.recency_score,
         "usability_score": record.usability_score,
         "total_score": record.total_score,
+        "ranking_notes": "; ".join(record.ranking_notes),
         "caution": record.caution,
         "source_api": record.source_api,
         "verified_fields": "; ".join(record.verified_fields),
@@ -183,3 +211,7 @@ def _trim(value: str, max_length: int) -> str:
 
 def _domestic_csv_path(path: Path) -> Path:
     return path.with_name(f"{path.stem}_domestic_links.csv")
+
+
+def _suggestions_txt_path(path: Path) -> Path:
+    return path.with_name(f"{path.stem}_relaxation_suggestions.txt")

@@ -15,7 +15,10 @@
 - DOI 및 메타데이터 확인
 - PDF 다운로드 가능 여부 확인
 - DOI/제목 기반 중복 제거
-- 관련성, 최신성, 활용 가능성 점수 계산
+- 필수/도움/제외 키워드 기반 정렬
+- 제목 키워드, 초록 키워드, DOI, PDF, 최근 5년, 인용 수 반영
+- 인용 수가 높은 고전 논문 별도 표시
+- 검색 결과 부족 시 검색 조건 완화 제안 출력
 - CLI 표 출력
 - 로컬 웹 UI
 - CSV 또는 JSON 저장
@@ -24,13 +27,13 @@
 ## CLI 실행
 
 ```powershell
-python -m scholarcheck "3D printed footwear lattice midsole" --limit 10 --format csv
+python -m scholarcheck "artificial intelligence education" --required "artificial intelligence,education" --helpful "teacher,curriculum" --exclude "patent,news" --limit 10 --format csv
 ```
 
 Python이 PATH에 없다면 Codex 번들 Python으로 실행할 수 있습니다.
 
 ```powershell
-C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m scholarcheck "3D printed footwear lattice midsole"
+C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe -m scholarcheck "artificial intelligence education"
 ```
 
 ## 웹 UI 실행
@@ -53,7 +56,7 @@ python -m scholarcheck.web --port 8770
 
 ## 출력 위치
 
-CLI의 기본 저장 위치는 `outputs/`입니다. CSV 저장 시 국내 DB 직접 확인 링크는 별도 `_domestic_links.csv` 파일로 저장됩니다.
+CLI의 기본 저장 위치는 `outputs/`입니다. CSV 저장 시 국내 DB 직접 확인 링크는 별도 `_domestic_links.csv` 파일로 저장됩니다. 검색 조건 완화 제안이 있으면 `_relaxation_suggestions.txt` 파일도 함께 저장됩니다.
 
 ## 국내 DB 주의
 

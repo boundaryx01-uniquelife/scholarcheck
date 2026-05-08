@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from scholarcheck.http import JsonHttpClient
@@ -25,6 +26,34 @@ def _clean_text(value: object) -> str:
     return cleaned
 
 
+def _clean_abstract(value: object) -> str:
+    text = _clean_text(value)
+    if text == UNKNOWN:
+        return UNKNOWN
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text or UNKNOWN
+
+
+def _abstract_from_inverted_index(value: object) -> str:
+    if not isinstance(value, dict):
+        return UNKNOWN
+
+    positioned_words: list[tuple[int, str]] = []
+    for word, positions in value.items():
+        if not isinstance(word, str) or not isinstance(positions, list):
+            continue
+        for position in positions:
+            try:
+                positioned_words.append((int(position), word))
+            except (TypeError, ValueError):
+                continue
+
+    if not positioned_words:
+        return UNKNOWN
+    return " ".join(word for _, word in sorted(positioned_words))
+
+
 def _year_from_parts(parts: object) -> int | None:
     if not isinstance(parts, dict):
         return None
@@ -47,6 +76,13 @@ def _normalize_doi(value: object) -> str:
     if normalized in {"none", "null", "unknown", "n/a", "na"}:
         return UNKNOWN
     return normalized
+
+
+def _int_or_none(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _author_names_crossref(authors: object) -> list[str]:
@@ -119,8 +155,8 @@ class CrossrefSource:
     def search(self, query: SearchQuery) -> list[PaperRecord]:
         params: dict[str, str | int] = {
             "query.bibliographic": query.topic,
-            "rows": min(query.limit * 2, 50),
-            "select": "title,author,published-print,published-online,published,container-title,publisher,DOI,URL,link,type",
+            "rows": min(query.limit * 4, 100),
+            "select": "title,author,published-print,published-online,published,container-title,publisher,DOI,URL,link,type,abstract,is-referenced-by-count",
         }
         filters: list[str] = ["type:journal-article"]
         if query.year_from:
@@ -150,7 +186,9 @@ class CrossrefSource:
             or _year_from_parts(item.get("published"))
         )
         doi = _normalize_doi(item.get("DOI"))
-        landing_page_url = str(item.get("URL", "")).strip() or UNKNOWN
+        landing_page_url = _clean_text(item.get("URL"))
+        abstract = _clean_abstract(item.get("abstract"))
+        citation_count = _int_or_none(item.get("is-referenced-by-count"))
 
         pdf_url = UNKNOWN
         links = item.get("link", [])
@@ -159,8 +197,8 @@ class CrossrefSource:
                 if not isinstance(link, dict):
                     continue
                 content_type = str(link.get("content-type", "")).lower()
-                url = str(link.get("URL", "")).strip()
-                if url and "pdf" in content_type:
+                url = _clean_text(link.get("URL"))
+                if url != UNKNOWN and "pdf" in content_type:
                     pdf_url = url
                     break
 
@@ -172,6 +210,8 @@ class CrossrefSource:
             ("publisher_or_institution", item.get("publisher")),
             ("doi", doi),
             ("landing_page_url", landing_page_url),
+            ("abstract", abstract),
+            ("citation_count", citation_count),
         ]:
             if value and value != UNKNOWN:
                 verified_fields.append(field_name)
@@ -181,11 +221,13 @@ class CrossrefSource:
             authors=_author_names_crossref(item.get("author")),
             year=year,
             venue=_first_text(item.get("container-title")),
-            publisher_or_institution=str(item.get("publisher", "")).strip() or UNKNOWN,
+            publisher_or_institution=_clean_text(item.get("publisher")),
             doi=doi,
             landing_page_url=landing_page_url,
             pdf_url=pdf_url,
             pdf_available=pdf_url != UNKNOWN,
+            abstract=abstract,
+            citation_count=citation_count,
             source_api="Crossref",
             verified_fields=verified_fields,
         )
@@ -198,7 +240,7 @@ class OpenAlexSource:
     def search(self, query: SearchQuery) -> list[PaperRecord]:
         params: dict[str, str | int] = {
             "search": query.topic,
-            "per-page": min(query.limit * 2, 50),
+            "per-page": min(query.limit * 4, 100),
             "mailto": "foruniquelife@gmail.com",
         }
         filters: list[str] = ["type:article"]
@@ -223,7 +265,7 @@ class OpenAlexSource:
         return records
 
     def _from_item(self, item: dict) -> PaperRecord:
-        doi = str(item.get("doi", "")).strip()
+        doi = _clean_text(item.get("doi"))
         if doi.startswith("https://doi.org/"):
             doi = doi.removeprefix("https://doi.org/")
         doi = _normalize_doi(doi)
@@ -242,6 +284,9 @@ class OpenAlexSource:
                 venue = _clean_text(source.get("display_name"))
                 publisher = _clean_text(source.get("host_organization_name"))
 
+        abstract = _abstract_from_inverted_index(item.get("abstract_inverted_index"))
+        citation_count = _int_or_none(item.get("cited_by_count"))
+
         verified_fields = ["title", "source_api"]
         for field_name, value in [
             ("authors", item.get("authorships")),
@@ -250,14 +295,13 @@ class OpenAlexSource:
             ("publisher_or_institution", publisher),
             ("doi", doi),
             ("landing_page_url", landing_page_url),
+            ("abstract", abstract),
+            ("citation_count", citation_count),
         ]:
             if value and value != UNKNOWN:
                 verified_fields.append(field_name)
 
-        try:
-            year = int(item.get("publication_year"))
-        except (TypeError, ValueError):
-            year = None
+        year = _int_or_none(item.get("publication_year"))
 
         return PaperRecord(
             title=_clean_text(item.get("title")),
@@ -269,6 +313,8 @@ class OpenAlexSource:
             landing_page_url=landing_page_url,
             pdf_url=pdf_url,
             pdf_available=pdf_url != UNKNOWN,
+            abstract=abstract,
+            citation_count=citation_count,
             source_api="OpenAlex",
             verified_fields=verified_fields,
         )

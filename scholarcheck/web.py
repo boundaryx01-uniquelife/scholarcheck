@@ -6,8 +6,8 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from scholarcheck.models import DomesticSearchLink, PaperRecord, UNKNOWN
-from scholarcheck.pipeline import build_query, search_papers
+from scholarcheck.models import DomesticSearchLink, PaperRecord, SearchQuery, UNKNOWN
+from scholarcheck.pipeline import build_query, parse_keyword_argument, search_papers
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -15,7 +15,7 @@ DEFAULT_PORT = 8765
 
 
 class ScholarCheckHandler(BaseHTTPRequestHandler):
-    server_version = "ScholarCheckWeb/0.1"
+    server_version = "ScholarCheckWeb/0.2"
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -33,9 +33,25 @@ class ScholarCheckHandler(BaseHTTPRequestHandler):
             limit = _int_param(params, "limit", default=10, minimum=1, maximum=50)
             year_from = _optional_int_param(params, "year_from")
             year_to = _optional_int_param(params, "year_to")
-            query = build_query(topic, year_from=year_from, year_to=year_to, limit=limit)
+            query = build_query(
+                topic,
+                required_keywords=parse_keyword_argument(_first_param(params, "required")),
+                helpful_keywords=parse_keyword_argument(_first_param(params, "helpful")),
+                excluded_keywords=parse_keyword_argument(_first_param(params, "exclude")),
+                year_from=year_from,
+                year_to=year_to,
+                limit=limit,
+            )
             result = search_papers(query)
-            self._send_html(render_results(query, result.records, result.domestic_links, result.warnings))
+            self._send_html(
+                render_results(
+                    query,
+                    result.records,
+                    result.domestic_links,
+                    result.warnings,
+                    result.relaxation_suggestions,
+                )
+            )
             return
 
         self._send_html(render_not_found(), HTTPStatus.NOT_FOUND)
@@ -61,17 +77,18 @@ def render_home(error: str = "") -> str:
             <div class="heading-block">
               <p class="eyebrow">논문나침반 MVP</p>
               <h1>ScholarCheck</h1>
-              <p class="lead">검증 가능한 해외 논문 메타데이터와 국내 DB 직접 확인 링크를 분리해서 보여줍니다.</p>
+              <p class="lead">검증 가능한 논문 메타데이터를 키워드 규칙으로 정렬하고, 국내 DB 직접 확인 링크를 분리해서 보여줍니다.</p>
             </div>
             {_render_search_form(error=error)}
           </div>
         </section>
         <section class="inner notes">
-          <h2>검증 원칙</h2>
+          <h2>정렬 기준</h2>
           <ul>
-            <li>Crossref와 OpenAlex에서 받은 값만 자동 검증 논문 목록에 표시합니다.</li>
-            <li>누락된 DOI, 링크, PDF 상태는 생성하지 않고 <code>UNKNOWN</code> 또는 확인 불가로 남깁니다.</li>
-            <li>국내 DB는 자동 크롤링하지 않으며, 직접 확인용 검색 링크만 제공합니다.</li>
+            <li>필수 키워드가 제목에 있으면 가장 높은 가중치를 적용합니다.</li>
+            <li>필수 키워드가 초록에 있으면 중간 가중치를 적용합니다.</li>
+            <li>도움 키워드는 보조 점수로 반영하고, 제외 키워드는 제목/초록에서 발견되면 결과에서 제외합니다.</li>
+            <li>DOI, 직접 PDF, 최근 5년 자료를 우선하며, 인용 수가 높은 고전 논문은 별도 표시합니다.</li>
           </ul>
         </section>
         """,
@@ -79,26 +96,29 @@ def render_home(error: str = "") -> str:
 
 
 def render_results(
-    query: object,
+    query: SearchQuery,
     records: list[PaperRecord],
     domestic_links: list[DomesticSearchLink],
     warnings: list[str],
+    relaxation_suggestions: list[str],
 ) -> str:
-    topic = getattr(query, "topic", "")
     return _page(
-        title=f"ScholarCheck - {_escape(topic)}",
+        title=f"ScholarCheck - {_escape(query.topic)}",
         body=f"""
         <section class="search-band compact">
           <div class="inner">
             <div class="heading-block">
               <p class="eyebrow">검색 결과</p>
-              <h1>{_escape(topic)}</h1>
+              <h1>{_escape(query.topic)}</h1>
             </div>
             {_render_search_form(
-                topic=topic,
-                limit=getattr(query, "limit", 10),
-                year_from=getattr(query, "year_from", None),
-                year_to=getattr(query, "year_to", None),
+                topic=query.topic,
+                required=", ".join(query.required_keywords),
+                helpful=", ".join(query.helpful_keywords),
+                exclude=", ".join(query.excluded_keywords),
+                limit=query.limit,
+                year_from=query.year_from,
+                year_to=query.year_to,
             )}
           </div>
         </section>
@@ -111,6 +131,7 @@ def render_results(
             </div>
             {_render_records_table(records)}
           </section>
+          {_render_relaxation_suggestions(relaxation_suggestions)}
           <section class="result-section domestic">
             <div class="section-title">
               <h2>국내 DB 직접 확인 필요</h2>
@@ -139,6 +160,9 @@ def render_not_found() -> str:
 def _render_search_form(
     *,
     topic: str = "",
+    required: str = "",
+    helpful: str = "",
+    exclude: str = "",
     limit: int = 10,
     year_from: int | None = None,
     year_to: int | None = None,
@@ -151,6 +175,20 @@ def _render_search_form(
         <span>연구 주제</span>
         <input name="topic" value="{_escape(topic)}" placeholder="예: 인공지능 교육, 3D printed footwear lattice" required>
       </label>
+      <div class="form-grid keywords">
+        <label>
+          <span>필수 키워드</span>
+          <input name="required" value="{_escape(required)}" placeholder="예: artificial intelligence, education">
+        </label>
+        <label>
+          <span>도움 키워드</span>
+          <input name="helpful" value="{_escape(helpful)}" placeholder="예: teacher, curriculum">
+        </label>
+        <label>
+          <span>제외 키워드</span>
+          <input name="exclude" value="{_escape(exclude)}" placeholder="예: patent, news">
+        </label>
+      </div>
       <div class="form-grid">
         <label>
           <span>결과 수</span>
@@ -182,9 +220,21 @@ def _render_warnings(warnings: list[str]) -> str:
     """
 
 
+def _render_relaxation_suggestions(suggestions: list[str]) -> str:
+    if not suggestions:
+        return ""
+    items = "".join(f"<li>{_escape(suggestion)}</li>" for suggestion in suggestions)
+    return f"""
+    <section class="suggestions">
+      <h2>검색 조건 완화 제안</h2>
+      <ul>{items}</ul>
+    </section>
+    """
+
+
 def _render_records_table(records: list[PaperRecord]) -> str:
     if not records:
-        return '<p class="empty">자동 검증된 논문을 찾지 못했습니다.</p>'
+        return '<p class="empty">자동 검증된 논문을 찾지 못했습니다. 아래 검색 조건 완화 제안을 확인해 주세요.</p>'
 
     rows = []
     for record in records:
@@ -201,8 +251,10 @@ def _render_records_table(records: list[PaperRecord]) -> str:
               <td>{_doi_link(record.doi)}</td>
               <td>{_page_link(record.landing_page_url)}</td>
               <td>{'가능' if record.pdf_available else '확인 불가'}</td>
-              <td>{_escape(record.region)}</td>
+              <td>{_escape(record.citation_display)}</td>
+              <td>{'고전 고인용' if record.classic_highly_cited else '-'}</td>
               <td class="score">{record.total_score:.2f}</td>
+              <td>{_escape('; '.join(record.ranking_notes) or '근거 없음')}</td>
               <td>{_escape(record.caution)}</td>
             </tr>
             """
@@ -220,8 +272,10 @@ def _render_records_table(records: list[PaperRecord]) -> str:
             <th>DOI</th>
             <th>원문 페이지</th>
             <th>PDF</th>
-            <th>구분</th>
+            <th>인용</th>
+            <th>고전</th>
             <th>점수</th>
+            <th>정렬 근거</th>
             <th>주의사항</th>
           </tr>
         </thead>
@@ -294,6 +348,7 @@ def _page(title: str, body: str) -> str:
       --accent-dark: #115e59;
       --warn-bg: #fff8e6;
       --warn-line: #e9c46a;
+      --suggest-bg: #edf7f5;
     }}
     * {{ box-sizing: border-box; }}
     body {{
@@ -306,10 +361,7 @@ def _page(title: str, body: str) -> str:
     }}
     a {{ color: var(--accent-dark); text-decoration: none; }}
     a:hover {{ text-decoration: underline; }}
-    .inner {{
-      width: min(1180px, calc(100% - 32px));
-      margin: 0 auto;
-    }}
+    .inner {{ width: min(1180px, calc(100% - 32px)); margin: 0 auto; }}
     .search-band {{
       background: var(--surface);
       border-bottom: 1px solid var(--line);
@@ -323,27 +375,10 @@ def _page(title: str, body: str) -> str:
       font-weight: 700;
       font-size: 13px;
     }}
-    h1 {{
-      margin: 0;
-      font-size: 34px;
-      line-height: 1.15;
-      letter-spacing: 0;
-    }}
-    h2 {{
-      margin: 0;
-      font-size: 20px;
-      letter-spacing: 0;
-    }}
-    .lead {{
-      max-width: 720px;
-      margin: 10px 0 0;
-      color: var(--muted);
-    }}
-    .search-form {{
-      display: grid;
-      gap: 14px;
-      max-width: 920px;
-    }}
+    h1 {{ margin: 0; font-size: 34px; line-height: 1.15; letter-spacing: 0; }}
+    h2 {{ margin: 0; font-size: 20px; letter-spacing: 0; }}
+    .lead {{ max-width: 760px; margin: 10px 0 0; color: var(--muted); }}
+    .search-form {{ display: grid; gap: 14px; max-width: 1040px; }}
     label span {{
       display: block;
       margin-bottom: 6px;
@@ -361,15 +396,8 @@ def _page(title: str, body: str) -> str:
       background: #fff;
       font: inherit;
     }}
-    input:focus {{
-      outline: 2px solid rgba(15, 118, 110, 0.18);
-      border-color: var(--accent);
-    }}
-    .form-grid {{
-      display: grid;
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-      gap: 12px;
-    }}
+    input:focus {{ outline: 2px solid rgba(15, 118, 110, 0.18); border-color: var(--accent); }}
+    .form-grid {{ display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }}
     button {{
       justify-self: start;
       min-height: 42px;
@@ -395,69 +423,31 @@ def _page(title: str, body: str) -> str:
     }}
     .section-title span, .section-note, .empty {{ color: var(--muted); }}
     .section-note {{ margin: 0 0 12px; }}
-    .table-wrap {{
-      overflow-x: auto;
-      border: 1px solid var(--line);
-      border-radius: 6px;
-    }}
-    table {{
-      width: 100%;
-      min-width: 980px;
-      border-collapse: collapse;
-      background: #fff;
-    }}
-    th, td {{
-      border-bottom: 1px solid var(--line);
-      padding: 10px 12px;
-      text-align: left;
-      vertical-align: top;
-    }}
-    th {{
-      color: #2b3748;
-      background: #eef2f6;
-      font-size: 13px;
-      white-space: nowrap;
-    }}
+    .table-wrap {{ overflow-x: auto; border: 1px solid var(--line); border-radius: 6px; }}
+    table {{ width: 100%; min-width: 1120px; border-collapse: collapse; background: #fff; }}
+    th, td {{ border-bottom: 1px solid var(--line); padding: 10px 12px; text-align: left; vertical-align: top; }}
+    th {{ color: #2b3748; background: #eef2f6; font-size: 13px; white-space: nowrap; }}
     td {{ color: #263244; }}
     tr:last-child td {{ border-bottom: 0; }}
-    .title-cell strong {{
-      display: block;
-      min-width: 260px;
-    }}
-    .title-cell span {{
-      display: block;
-      margin-top: 4px;
-      color: var(--muted);
-      font-size: 12px;
-    }}
-    .score {{
-      font-weight: 800;
-      color: var(--accent-dark);
-      white-space: nowrap;
-    }}
-    .warnings {{
-      border: 1px solid var(--warn-line);
+    .title-cell strong {{ display: block; min-width: 250px; }}
+    .title-cell span {{ display: block; margin-top: 4px; color: var(--muted); font-size: 12px; }}
+    .score {{ font-weight: 800; color: var(--accent-dark); white-space: nowrap; }}
+    .warnings, .suggestions {{
       border-radius: 6px;
       padding: 14px 16px;
-      background: var(--warn-bg);
+      margin-bottom: 22px;
     }}
-    .warnings h2 {{ font-size: 16px; }}
-    .warnings ul {{ margin: 8px 0 0; padding-left: 20px; }}
-    .error {{
-      margin: 0;
-      color: #b42318;
-      font-weight: 700;
-    }}
-    code {{
-      padding: 1px 5px;
-      border-radius: 4px;
-      background: #eef2f6;
-    }}
-    @media (max-width: 720px) {{
+    .warnings {{ border: 1px solid var(--warn-line); background: var(--warn-bg); }}
+    .suggestions {{ border: 1px solid #8fc7bd; background: var(--suggest-bg); margin-top: 24px; }}
+    .warnings h2, .suggestions h2 {{ font-size: 16px; }}
+    .warnings ul, .suggestions ul {{ margin: 8px 0 0; padding-left: 20px; }}
+    .error {{ margin: 0; color: #b42318; font-weight: 700; }}
+    code {{ padding: 1px 5px; border-radius: 4px; background: #eef2f6; }}
+    @media (max-width: 760px) {{
       .form-grid {{ grid-template-columns: 1fr; }}
       h1 {{ font-size: 28px; }}
       .section-title {{ display: block; }}
-      table {{ min-width: 860px; }}
+      table {{ min-width: 980px; }}
     }}
   </style>
 </head>
