@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 
+from scholarcheck.citations import build_reference_candidates
 from scholarcheck.manual_checks import load_manual_checks
 from scholarcheck.models import DomesticManualCheck, SearchQuery, SearchResult, UNKNOWN
 
@@ -44,6 +45,8 @@ def render_professor_report(
   {_query_table(query)}
   <h2>Verified Overseas API Results</h2>
   {_records_table(result)}
+  <h2>Reference Candidates</h2>
+  {_citation_candidates_table(result)}
   <h2>Domestic DB Direct Check Required</h2>
   {_domestic_table(result)}
   <h2>Domestic Manual Check Records</h2>
@@ -100,6 +103,17 @@ def _domestic_table(result: SearchResult) -> str:
         for link in result.domestic_links
     ]
     return _simple_table(["DB", "Keywords", "Status", "Download", "Search URL"], rows)
+
+
+def _citation_candidates_table(result: SearchResult) -> str:
+    candidates = build_reference_candidates(result.records)
+    if not candidates:
+        return "<p>No reference candidates were generated. No fake citations were created.</p>"
+    rows = [
+        [candidate.title, candidate.reference, " | ".join(candidate.warnings)]
+        for candidate in candidates
+    ]
+    return _simple_table(["Paper", "Reference Candidate", "Needs Review"], rows)
 
 
 def _manual_checks_table(checks: list[DomesticManualCheck]) -> str:

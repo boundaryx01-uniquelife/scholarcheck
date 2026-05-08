@@ -7,6 +7,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlencode, urlparse
 
 from scholarcheck.checklist import build_citation_checklist
+from scholarcheck.citations import CITATION_NOTICE, build_reference_candidates
 from scholarcheck.manual_checks import (
     add_manual_check,
     backup_manual_checks,
@@ -59,6 +60,9 @@ class ScholarCheckHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/report.html":
             self._handle_report(parsed)
+            return
+        if parsed.path == "/citations":
+            self._handle_citations(parsed)
             return
         if parsed.path == "/detail":
             self._handle_detail(parsed)
@@ -165,6 +169,26 @@ class ScholarCheckHandler(BaseHTTPRequestHandler):
             f"scholarcheck_report_{metadata['session_id']}.html",
             "text/html; charset=utf-8",
         )
+
+    def _handle_citations(self, parsed) -> None:
+        params = parse_qs(parsed.query)
+        session_id = _first_param(params, "session")
+        if session_id:
+            try:
+                metadata, query, result = load_search_session(resolve_session_path(session_id))
+            except (FileNotFoundError, ValueError):
+                self._send_html(render_not_found(), HTTPStatus.NOT_FOUND)
+                return
+            self._send_html(render_citations(query, result, session_id=metadata.get("session_id", session_id)))
+            return
+
+        topic = _first_param(params, "topic")
+        if not topic:
+            self._send_html(render_home(error="연구 주제를 입력해 주세요."), HTTPStatus.BAD_REQUEST)
+            return
+        query = _query_from_params(params)
+        result = search_papers(query)
+        self._send_html(render_citations(query, result, raw_query=parsed.query))
 
     def _handle_manual_check_download(self, path: str) -> None:
         checks = load_manual_checks()
@@ -296,6 +320,7 @@ def render_results(
           <div class="download-actions">
             <a class="button-link" href="/download.csv?{_escape(raw_query)}">CSV 다운로드</a>
             <a class="button-link secondary" href="/download.json?{_escape(raw_query)}">JSON 다운로드</a>
+            <a class="button-link secondary" href="/citations?{_escape(raw_query)}">참고문헌 후보 보기</a>
             <a class="button-link secondary" href="/save-session?{_escape(raw_query)}">검색 세션 저장</a>
             <a class="button-link secondary" href="/sessions">저장 세션 보기</a>
           </div>
@@ -348,6 +373,7 @@ def render_session(
         <main class="inner results">
           <div class="download-actions">
             <a class="button-link" href="/report.html?session={_escape(session_id)}">교수님 검토용 HTML 리포트</a>
+            <a class="button-link secondary" href="/citations?session={_escape(session_id)}">참고문헌 후보 보기</a>
             <a class="button-link secondary" href="/search?{_escape(raw_query)}">같은 조건으로 다시 검색</a>
             <a class="button-link secondary" href="/sessions">저장 세션 목록</a>
           </div>
@@ -386,12 +412,13 @@ def render_sessions() -> str:
                   <td>{len(result.records)}건</td>
                   <td><a href="/session?id={_escape(session_id)}">불러오기</a></td>
                   <td><a href="/report.html?session={_escape(session_id)}">HTML 리포트</a></td>
+                  <td><a href="/citations?session={_escape(session_id)}">참고문헌 후보</a></td>
                 </tr>
                 """
             )
         content = f"""
         <div class="table-wrap"><table>
-          <thead><tr><th>주제</th><th>논문 수</th><th>세션</th><th>리포트</th></tr></thead>
+          <thead><tr><th>주제</th><th>논문 수</th><th>세션</th><th>리포트</th><th>참고문헌</th></tr></thead>
           <tbody>{''.join(rows)}</tbody>
         </table></div>
         """
@@ -406,6 +433,58 @@ def render_sessions() -> str:
           </div>
         </section>
         <main class="inner results">{content}</main>
+        """,
+    )
+
+
+def render_citations(
+    query: SearchQuery,
+    result: SearchResult,
+    *,
+    raw_query: str = "",
+    session_id: str = "",
+) -> str:
+    candidates = build_reference_candidates(result.records)
+    if not candidates:
+        body = '<p class="empty">참고문헌 후보를 만들 자동 검증 논문 결과가 없습니다. 가짜 후보를 생성하지 않았습니다.</p>'
+    else:
+        rows = []
+        for index, candidate in enumerate(candidates, start=1):
+            warnings = "".join(f"<li>{_escape(item)}</li>" for item in candidate.warnings)
+            rows.append(
+                f"""
+                <tr>
+                  <td>{index}</td>
+                  <td><strong>{_screen(candidate.title)}</strong></td>
+                  <td>{_escape(candidate.reference)}</td>
+                  <td><ul>{warnings}</ul></td>
+                </tr>
+                """
+            )
+        body = f"""
+        <div class="table-wrap"><table>
+          <thead><tr><th>#</th><th>논문</th><th>참고문헌 후보안</th><th>확인 필요</th></tr></thead>
+          <tbody>{''.join(rows)}</tbody>
+        </table></div>
+        """
+    back_link = f"/session?id={_escape(session_id)}" if session_id else f"/search?{_escape(raw_query)}"
+    return _page(
+        f"ScholarCheck Citations - {_escape(query.topic)}",
+        f"""
+        <section class="search-band compact">
+          <div class="inner">
+            <p class="eyebrow">참고문헌 후보</p>
+            <h1>{_escape(query.topic)}</h1>
+            <p class="lead">{_escape(CITATION_NOTICE)}</p>
+            <p><a href="{back_link}">이전 화면으로 돌아가기</a></p>
+          </div>
+        </section>
+        <main class="inner results">
+          <section class="result-section">
+            <div class="section-title"><h2>참고문헌 후보안</h2><span>{len(candidates)}건</span></div>
+            {body}
+          </section>
+        </main>
         """,
     )
 

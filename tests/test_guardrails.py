@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from scholarcheck.checklist import build_citation_checklist
+from scholarcheck.citations import CITATION_NOTICE, build_reference_candidates
 from scholarcheck.domestic import build_domestic_links
 from scholarcheck.manual_checks import (
     add_manual_check,
@@ -19,7 +20,16 @@ from scholarcheck.reports import render_professor_report
 from scholarcheck.sessions import load_search_session, save_search_session
 from scholarcheck.sources import CrossrefSource
 from scholarcheck.verification import verify_doi_with_crossref
-from scholarcheck.web import SCREEN_UNKNOWN, _render_records_table, _screen, render_detail, render_home, render_results, render_session
+from scholarcheck.web import (
+    SCREEN_UNKNOWN,
+    _render_records_table,
+    _screen,
+    render_citations,
+    render_detail,
+    render_home,
+    render_results,
+    render_session,
+)
 
 
 def test_missing_doi_is_not_generated() -> None:
@@ -296,3 +306,50 @@ def test_web_session_page_links_to_professor_report() -> None:
 
     assert "/report.html?session=session-1" in html
     assert "저장된 자동 검증 논문 목록" in html
+
+
+def test_reference_candidates_keep_missing_values_and_warning() -> None:
+    candidates = build_reference_candidates(
+        [
+            PaperRecord(
+                title="AI education sample",
+                authors=[],
+                year=None,
+                venue=UNKNOWN,
+                doi=UNKNOWN,
+                landing_page_url=UNKNOWN,
+            )
+        ]
+    )
+
+    assert len(candidates) == 1
+    assert candidates[0].reference.startswith(f"{UNKNOWN} ({UNKNOWN}). AI education sample. {UNKNOWN}.")
+    assert CITATION_NOTICE in candidates[0].warnings
+    assert any("임의 DOI" in item for item in candidates[0].warnings)
+
+
+def test_reference_candidates_use_doi_link_without_inventing_missing_pages() -> None:
+    candidates = build_reference_candidates(
+        [
+            PaperRecord(
+                title="AI education sample",
+                authors=["Kim A", "Lee B"],
+                year=2024,
+                venue="Journal of AI Education",
+                doi="10.1000/example",
+            )
+        ]
+    )
+
+    assert candidates[0].reference == "Kim A, & Lee B (2024). AI education sample. Journal of AI Education. https://doi.org/10.1000/example"
+
+
+def test_web_citation_candidate_view_is_marked_as_candidate_not_final() -> None:
+    query = build_query("ai education")
+    result = SearchResult(records=[PaperRecord(title="AI education sample", doi=UNKNOWN)])
+
+    html = render_citations(query, result, session_id="session-1")
+
+    assert "참고문헌 후보안" in html
+    assert "최종 확정 인용이 아니며" in html
+    assert UNKNOWN in html
