@@ -1,0 +1,9 @@
+[project]
+name = "scholarcheck"
+version = "0.1.0"
+description = "ScholarCheck MVP CLI for verified scholarly search results"
+requires-python = ">=3.11"
+dependencies = []
+
+[tool.ruff]
+line-length = 100
