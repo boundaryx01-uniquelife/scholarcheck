@@ -11,13 +11,15 @@ from scholarcheck.manual_checks import (
     manual_checks_to_csv,
     manual_checks_to_json,
 )
-from scholarcheck.models import DomesticManualCheck, PaperRecord, SearchQuery, UNKNOWN
+from scholarcheck.models import DomesticManualCheck, PaperRecord, SearchQuery, SearchResult, UNKNOWN
 from scholarcheck.output import records_to_csv, records_to_json, save_records
 from scholarcheck.pipeline import build_query, deduplicate, search_papers
 from scholarcheck.scoring import filter_and_score
+from scholarcheck.reports import render_professor_report
+from scholarcheck.sessions import load_search_session, save_search_session
 from scholarcheck.sources import CrossrefSource
 from scholarcheck.verification import verify_doi_with_crossref
-from scholarcheck.web import SCREEN_UNKNOWN, _render_records_table, _screen, render_detail, render_home, render_results
+from scholarcheck.web import SCREEN_UNKNOWN, _render_records_table, _screen, render_detail, render_home, render_results, render_session
 
 
 def test_missing_doi_is_not_generated() -> None:
@@ -230,3 +232,67 @@ def test_web_results_include_manual_export_links() -> None:
     assert "/manual-checks.csv" in html
     assert "/manual-checks.json" in html
     assert "/manual-checks-backup" in html
+
+
+def test_search_session_can_be_saved_and_loaded(tmp_path: Path) -> None:
+    query = build_query("ai education", required_keywords=["ai", "education"], limit=3)
+    result = SearchResult(
+        records=[PaperRecord(title="AI education sample", doi=UNKNOWN, pdf_url=UNKNOWN)],
+        domestic_links=build_domestic_links(query),
+        warnings=[],
+        relaxation_suggestions=[],
+    )
+
+    path = save_search_session(query, result, session_dir=tmp_path)
+    metadata, loaded_query, loaded_result = load_search_session(path)
+
+    assert path.parent == tmp_path
+    assert metadata["session_id"] == path.stem
+    assert loaded_query.topic == "ai education"
+    assert loaded_result.records[0].doi == UNKNOWN
+    assert loaded_result.records[0].pdf_url == UNKNOWN
+    assert loaded_result.domestic_links
+
+
+def test_professor_report_keeps_guardrail_notice_and_separates_domestic_records() -> None:
+    query = build_query("ai education")
+    result = SearchResult(
+        records=[PaperRecord(title="AI education sample", doi=UNKNOWN)],
+        domestic_links=build_domestic_links(query),
+        warnings=[],
+        relaxation_suggestions=["Try broader keywords."],
+    )
+    metadata = {"session_id": "session-1", "saved_at": "2026-05-08T00:00:00Z"}
+
+    html = render_professor_report(
+        metadata,
+        query,
+        result,
+        manual_checks=[
+            DomesticManualCheck(
+                database_name="RISS",
+                search_keywords="ai education",
+                title="Manual domestic paper",
+            )
+        ],
+    )
+
+    assert "Before citation" in html
+    assert "Verified Overseas API Results" in html
+    assert "Domestic DB Direct Check Required" in html
+    assert "Manual domestic paper" in html
+    assert "확인 불가" in html
+
+
+def test_web_session_page_links_to_professor_report() -> None:
+    query = build_query("ai education")
+    result = SearchResult(records=[PaperRecord(title="AI education sample")])
+    html = render_session(
+        {"session_id": "session-1", "saved_at": "2026-05-08T00:00:00Z"},
+        query,
+        result,
+        manual_checks=[],
+    )
+
+    assert "/report.html?session=session-1" in html
+    assert "저장된 자동 검증 논문 목록" in html

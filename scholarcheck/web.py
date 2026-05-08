@@ -14,9 +14,11 @@ from scholarcheck.manual_checks import (
     manual_checks_to_csv,
     manual_checks_to_json,
 )
-from scholarcheck.models import DomesticManualCheck, DomesticSearchLink, PaperRecord, SearchQuery, UNKNOWN
+from scholarcheck.models import DomesticManualCheck, DomesticSearchLink, PaperRecord, SearchQuery, SearchResult, UNKNOWN
 from scholarcheck.output import records_to_csv, records_to_json
 from scholarcheck.pipeline import build_query, parse_keyword_argument, search_papers
+from scholarcheck.reports import render_professor_report
+from scholarcheck.sessions import list_search_sessions, load_search_session, resolve_session_path, save_search_session
 from scholarcheck.verification import verify_doi_with_crossref
 
 
@@ -45,6 +47,18 @@ class ScholarCheckHandler(BaseHTTPRequestHandler):
             return
         if parsed.path in {"/manual-checks.csv", "/manual-checks.json", "/manual-checks-backup"}:
             self._handle_manual_check_download(parsed.path)
+            return
+        if parsed.path == "/save-session":
+            self._handle_save_session(parsed)
+            return
+        if parsed.path == "/sessions":
+            self._send_html(render_sessions())
+            return
+        if parsed.path == "/session":
+            self._handle_session(parsed)
+            return
+        if parsed.path == "/report.html":
+            self._handle_report(parsed)
             return
         if parsed.path == "/detail":
             self._handle_detail(parsed)
@@ -115,6 +129,41 @@ class ScholarCheckHandler(BaseHTTPRequestHandler):
                 raw_query=parsed.query,
                 manual_checks=load_manual_checks(),
             )
+        )
+
+    def _handle_save_session(self, parsed) -> None:
+        params = parse_qs(parsed.query)
+        topic = _first_param(params, "topic")
+        if not topic:
+            self._send_html(render_home(error="연구 주제를 입력해 주세요."), HTTPStatus.BAD_REQUEST)
+            return
+        query = _query_from_params(params)
+        result = search_papers(query)
+        path = save_search_session(query, result)
+        self._send_redirect(f"/session?id={path.stem}")
+
+    def _handle_session(self, parsed) -> None:
+        params = parse_qs(parsed.query)
+        session_id = _first_param(params, "id")
+        try:
+            metadata, query, result = load_search_session(resolve_session_path(session_id))
+        except (FileNotFoundError, ValueError):
+            self._send_html(render_not_found(), HTTPStatus.NOT_FOUND)
+            return
+        self._send_html(render_session(metadata, query, result, manual_checks=load_manual_checks()))
+
+    def _handle_report(self, parsed) -> None:
+        params = parse_qs(parsed.query)
+        session_id = _first_param(params, "session")
+        try:
+            metadata, query, result = load_search_session(resolve_session_path(session_id))
+        except (FileNotFoundError, ValueError):
+            self._send_html(render_not_found(), HTTPStatus.NOT_FOUND)
+            return
+        self._send_download(
+            render_professor_report(metadata, query, result, load_manual_checks()),
+            f"scholarcheck_report_{metadata['session_id']}.html",
+            "text/html; charset=utf-8",
         )
 
     def _handle_manual_check_download(self, path: str) -> None:
@@ -247,6 +296,8 @@ def render_results(
           <div class="download-actions">
             <a class="button-link" href="/download.csv?{_escape(raw_query)}">CSV 다운로드</a>
             <a class="button-link secondary" href="/download.json?{_escape(raw_query)}">JSON 다운로드</a>
+            <a class="button-link secondary" href="/save-session?{_escape(raw_query)}">검색 세션 저장</a>
+            <a class="button-link secondary" href="/sessions">저장 세션 보기</a>
           </div>
           <section class="result-section">
             <div class="section-title"><h2>자동 검증 논문 목록</h2><span>{len(records)}건</span></div>
@@ -262,6 +313,99 @@ def render_results(
             {_render_manual_checks(manual_checks)}
           </section>
         </main>
+        """,
+    )
+
+
+def render_session(
+    metadata: dict[str, str],
+    query: SearchQuery,
+    result: SearchResult,
+    manual_checks: list[DomesticManualCheck],
+) -> str:
+    raw_query = urlencode(
+        {
+            "topic": query.topic,
+            "required": ", ".join(query.required_keywords),
+            "helpful": ", ".join(query.helpful_keywords),
+            "exclude": ", ".join(query.excluded_keywords),
+            "limit": str(query.limit),
+            "year_from": "" if query.year_from is None else str(query.year_from),
+            "year_to": "" if query.year_to is None else str(query.year_to),
+        }
+    )
+    session_id = metadata.get("session_id", UNKNOWN)
+    return _page(
+        f"ScholarCheck Session - {_escape(query.topic)}",
+        f"""
+        <section class="search-band compact">
+          <div class="inner">
+            <p class="eyebrow">저장된 검색 세션</p>
+            <h1>{_escape(query.topic)}</h1>
+            <p class="lead">저장 시각: {_screen(metadata.get("saved_at", UNKNOWN))}</p>
+          </div>
+        </section>
+        <main class="inner results">
+          <div class="download-actions">
+            <a class="button-link" href="/report.html?session={_escape(session_id)}">교수님 검토용 HTML 리포트</a>
+            <a class="button-link secondary" href="/search?{_escape(raw_query)}">같은 조건으로 다시 검색</a>
+            <a class="button-link secondary" href="/sessions">저장 세션 목록</a>
+          </div>
+          <section class="result-section">
+            <div class="section-title"><h2>저장된 자동 검증 논문 목록</h2><span>{len(result.records)}건</span></div>
+            {_render_records_table(result.records, raw_query)}
+          </section>
+          {_render_suggestions(result.relaxation_suggestions)}
+          <section class="result-section domestic">
+            <div class="section-title"><h2>국내 DB 직접 확인 필요</h2><span>{len(result.domestic_links)}개 DB</span></div>
+            {_render_domestic_table(result.domestic_links)}
+            {_render_manual_export_actions(manual_checks)}
+            {_render_manual_checks(manual_checks)}
+          </section>
+        </main>
+        """,
+    )
+
+
+def render_sessions() -> str:
+    session_paths = list_search_sessions()
+    if not session_paths:
+        content = '<p class="empty">아직 저장된 검색 세션이 없습니다.</p>'
+    else:
+        rows = []
+        for path in session_paths:
+            try:
+                metadata, query, result = load_search_session(path)
+            except (OSError, ValueError):
+                continue
+            session_id = metadata.get("session_id", path.stem)
+            rows.append(
+                f"""
+                <tr>
+                  <td><strong>{_escape(query.topic)}</strong><span>{_screen(metadata.get("saved_at", UNKNOWN))}</span></td>
+                  <td>{len(result.records)}건</td>
+                  <td><a href="/session?id={_escape(session_id)}">불러오기</a></td>
+                  <td><a href="/report.html?session={_escape(session_id)}">HTML 리포트</a></td>
+                </tr>
+                """
+            )
+        content = f"""
+        <div class="table-wrap"><table>
+          <thead><tr><th>주제</th><th>논문 수</th><th>세션</th><th>리포트</th></tr></thead>
+          <tbody>{''.join(rows)}</tbody>
+        </table></div>
+        """
+    return _page(
+        "ScholarCheck Sessions",
+        f"""
+        <section class="search-band compact">
+          <div class="inner">
+            <p class="eyebrow">검색 세션</p>
+            <h1>저장된 검색 세션</h1>
+            <p><a href="/">검색 화면으로 돌아가기</a></p>
+          </div>
+        </section>
+        <main class="inner results">{content}</main>
         """,
     )
 
