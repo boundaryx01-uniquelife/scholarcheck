@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import zipfile
 from pathlib import Path
 
 from scholarcheck.checklist import build_citation_checklist
 from scholarcheck.citations import CITATION_NOTICE, build_reference_candidates
 from scholarcheck.domestic import build_domestic_links
+from scholarcheck.excel_export import build_excel_workbook, save_excel_workbook
 from scholarcheck.manual_checks import (
     add_manual_check,
     backup_manual_checks,
@@ -390,3 +392,63 @@ def test_web_literature_matrix_view_keeps_review_notice_and_memo_column() -> Non
     assert MATRIX_NOTICE in html
     assert NEEDS_REVIEW in html
     assert "사용자 메모" in html
+
+
+def test_excel_workbook_contains_separate_review_sheets_and_guardrails(tmp_path: Path) -> None:
+    query = build_query("ai education")
+    result = SearchResult(
+        records=[
+            PaperRecord(
+                title="AI education sample",
+                authors=["Kim A"],
+                year=2024,
+                venue="Journal of AI Education",
+                doi=UNKNOWN,
+                landing_page_url=UNKNOWN,
+            )
+        ],
+        domestic_links=build_domestic_links(query),
+        warnings=["API warning"],
+        relaxation_suggestions=["Try broader keywords."],
+    )
+    manual_checks = [
+        DomesticManualCheck(
+            database_name="RISS",
+            search_keywords="ai education",
+            title="Manual domestic paper",
+        )
+    ]
+    metadata = {"session_id": "session-1", "saved_at": "2026-05-08T00:00:00Z"}
+    output_path = tmp_path / "scholarcheck.xlsx"
+
+    save_excel_workbook(metadata, query, result, manual_checks, output_path)
+
+    assert output_path.exists()
+    with zipfile.ZipFile(output_path) as workbook:
+        names = set(workbook.namelist())
+        workbook_xml = workbook.read("xl/workbook.xml").decode("utf-8")
+        matrix_xml = workbook.read("xl/worksheets/sheet4.xml").decode("utf-8")
+        manual_xml = workbook.read("xl/worksheets/sheet6.xml").decode("utf-8")
+
+    assert "[Content_Types].xml" in names
+    assert "Verified Papers" in workbook_xml
+    assert "Reference Candidates" in workbook_xml
+    assert "Literature Matrix" in workbook_xml
+    assert "Domestic DB Links" in workbook_xml
+    assert "Manual Domestic Checks" in workbook_xml
+    assert NEEDS_REVIEW in matrix_xml
+    assert UNKNOWN in matrix_xml
+    assert "Manual domestic paper" in manual_xml
+
+
+def test_excel_workbook_bytes_are_valid_xlsx_zip() -> None:
+    query = build_query("ai education")
+    result = SearchResult(records=[PaperRecord(title="AI education sample", doi=UNKNOWN)])
+    payload = build_excel_workbook(
+        {"session_id": "session-1", "saved_at": "2026-05-08T00:00:00Z"},
+        query,
+        result,
+        [],
+    )
+
+    assert payload.startswith(b"PK")

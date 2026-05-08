@@ -8,6 +8,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 
 from scholarcheck.checklist import build_citation_checklist
 from scholarcheck.citations import CITATION_NOTICE, build_reference_candidates
+from scholarcheck.excel_export import build_excel_workbook
 from scholarcheck.manual_checks import (
     add_manual_check,
     backup_manual_checks,
@@ -61,6 +62,9 @@ class ScholarCheckHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/report.html":
             self._handle_report(parsed)
+            return
+        if parsed.path == "/workbook.xlsx":
+            self._handle_workbook(parsed)
             return
         if parsed.path == "/citations":
             self._handle_citations(parsed)
@@ -174,6 +178,20 @@ class ScholarCheckHandler(BaseHTTPRequestHandler):
             "text/html; charset=utf-8",
         )
 
+    def _handle_workbook(self, parsed) -> None:
+        params = parse_qs(parsed.query)
+        session_id = _first_param(params, "session")
+        try:
+            metadata, query, result = load_search_session(resolve_session_path(session_id))
+        except (FileNotFoundError, ValueError):
+            self._send_html(render_not_found(), HTTPStatus.NOT_FOUND)
+            return
+        self._send_binary_download(
+            build_excel_workbook(metadata, query, result, load_manual_checks()),
+            f"scholarcheck_workbook_{metadata['session_id']}.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
     def _handle_citations(self, parsed) -> None:
         params = parse_qs(parsed.query)
         session_id = _first_param(params, "session")
@@ -273,6 +291,9 @@ class ScholarCheckHandler(BaseHTTPRequestHandler):
 
     def _send_download(self, body: str, filename: str, content_type: str) -> None:
         payload = body.encode("utf-8-sig")
+        self._send_binary_download(payload, filename, content_type)
+
+    def _send_binary_download(self, payload: bytes, filename: str, content_type: str) -> None:
         self.send_response(HTTPStatus.OK.value)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
@@ -398,6 +419,7 @@ def render_session(
         <main class="inner results">
           <div class="download-actions">
             <a class="button-link" href="/report.html?session={_escape(session_id)}">교수님 검토용 HTML 리포트</a>
+            <a class="button-link secondary" href="/workbook.xlsx?session={_escape(session_id)}">Excel 통합 파일</a>
             <a class="button-link secondary" href="/citations?session={_escape(session_id)}">참고문헌 후보 보기</a>
             <a class="button-link secondary" href="/matrix?session={_escape(session_id)}">선행연구 매트릭스</a>
             <a class="button-link secondary" href="/search?{_escape(raw_query)}">같은 조건으로 다시 검색</a>
@@ -438,6 +460,7 @@ def render_sessions() -> str:
                   <td>{len(result.records)}건</td>
                   <td><a href="/session?id={_escape(session_id)}">불러오기</a></td>
                   <td><a href="/report.html?session={_escape(session_id)}">HTML 리포트</a></td>
+                  <td><a href="/workbook.xlsx?session={_escape(session_id)}">Excel</a></td>
                   <td><a href="/citations?session={_escape(session_id)}">참고문헌 후보</a></td>
                   <td><a href="/matrix?session={_escape(session_id)}">매트릭스</a></td>
                 </tr>
@@ -445,7 +468,7 @@ def render_sessions() -> str:
             )
         content = f"""
         <div class="table-wrap"><table>
-          <thead><tr><th>주제</th><th>논문 수</th><th>세션</th><th>리포트</th><th>참고문헌</th><th>매트릭스</th></tr></thead>
+          <thead><tr><th>주제</th><th>논문 수</th><th>세션</th><th>리포트</th><th>Excel</th><th>참고문헌</th><th>매트릭스</th></tr></thead>
           <tbody>{''.join(rows)}</tbody>
         </table></div>
         """
