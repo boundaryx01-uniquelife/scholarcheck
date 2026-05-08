@@ -18,6 +18,13 @@ from scholarcheck.matrix import MATRIX_NOTICE, NEEDS_REVIEW, build_literature_ma
 from scholarcheck.models import DomesticManualCheck, PaperRecord, SearchQuery, SearchResult, UNKNOWN
 from scholarcheck.output import records_to_csv, records_to_json, save_records
 from scholarcheck.pipeline import build_query, deduplicate, search_papers
+from scholarcheck.projects import (
+    add_session_to_project,
+    create_project,
+    load_project,
+    load_project_sessions,
+    project_to_json,
+)
 from scholarcheck.scoring import filter_and_score
 from scholarcheck.reports import render_professor_report
 from scholarcheck.sessions import load_search_session, save_search_session
@@ -31,6 +38,8 @@ from scholarcheck.web import (
     render_detail,
     render_home,
     render_literature_matrix,
+    render_project,
+    render_projects,
     render_results,
     render_session,
 )
@@ -461,3 +470,61 @@ def test_excel_workbook_bytes_are_valid_xlsx_zip() -> None:
     )
 
     assert payload.startswith(b"PK")
+
+
+def test_project_references_saved_sessions_without_mutating_sources(tmp_path: Path) -> None:
+    query = build_query("ai education")
+    result = SearchResult(records=[PaperRecord(title="AI education sample", doi=UNKNOWN)])
+    session_path = save_search_session(query, result, session_dir=tmp_path / "sessions")
+    original_session_text = session_path.read_text(encoding="utf-8")
+
+    project_path = create_project(
+        "AI education review",
+        session_ids=[session_path.stem, session_path.stem],
+        project_dir=tmp_path / "projects",
+    )
+    project = load_project(project_path)
+    sessions = load_project_sessions(project, session_dir=tmp_path / "sessions")
+
+    assert project.session_ids == [session_path.stem]
+    assert len(sessions) == 1
+    assert sessions[0][2].records[0].doi == UNKNOWN
+    assert session_path.read_text(encoding="utf-8") == original_session_text
+    assert "Project files reference saved search sessions" in project_to_json(project)
+
+
+def test_project_can_add_session_reference_without_fabricating_missing_session(tmp_path: Path) -> None:
+    project_path = create_project("AI curriculum", project_dir=tmp_path / "projects")
+    project = load_project(project_path)
+
+    updated = add_session_to_project(
+        project.project_id,
+        "missing-session",
+        project_dir=tmp_path / "projects",
+    )
+    sessions = load_project_sessions(updated, session_dir=tmp_path / "sessions")
+
+    assert updated.session_ids == ["missing-session"]
+    assert sessions == []
+
+
+def test_web_project_views_keep_session_and_manual_records_separated(tmp_path: Path, monkeypatch) -> None:
+    query = build_query("ai education")
+    result = SearchResult(records=[PaperRecord(title="AI education sample")])
+    session_path = save_search_session(query, result, session_dir=tmp_path / "sessions")
+    project_path = create_project(
+        "AI education review",
+        session_ids=[session_path.stem],
+        project_dir=tmp_path / "projects",
+    )
+    project = load_project(project_path)
+
+    monkeypatch.setattr("scholarcheck.web.list_projects", lambda: [project_path])
+    monkeypatch.setattr("scholarcheck.web.load_project_sessions", lambda _project: load_project_sessions(_project, session_dir=tmp_path / "sessions"))
+    project_html = render_project(project)
+    projects_html = render_projects(session_id=session_path.stem)
+
+    assert "프로젝트는 저장 세션 ID만 참조합니다" in project_html
+    assert "AI education sample" not in project_html
+    assert "세션 열기" in project_html
+    assert "project-add-session" in projects_html

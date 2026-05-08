@@ -20,6 +20,14 @@ from scholarcheck.matrix import MATRIX_NOTICE, build_literature_matrix
 from scholarcheck.models import DomesticManualCheck, DomesticSearchLink, PaperRecord, SearchQuery, SearchResult, UNKNOWN
 from scholarcheck.output import records_to_csv, records_to_json
 from scholarcheck.pipeline import build_query, parse_keyword_argument, search_papers
+from scholarcheck.projects import (
+    add_session_to_project,
+    create_project,
+    list_projects,
+    load_project,
+    load_project_sessions,
+    resolve_project_path,
+)
 from scholarcheck.reports import render_professor_report
 from scholarcheck.sessions import list_search_sessions, load_search_session, resolve_session_path, save_search_session
 from scholarcheck.verification import verify_doi_with_crossref
@@ -56,6 +64,18 @@ class ScholarCheckHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/sessions":
             self._send_html(render_sessions())
+            return
+        if parsed.path == "/projects":
+            self._send_html(render_projects(session_id=_first_param(parse_qs(parsed.query), "session")))
+            return
+        if parsed.path == "/project":
+            self._handle_project(parsed)
+            return
+        if parsed.path == "/create-project":
+            self._handle_create_project(parsed)
+            return
+        if parsed.path == "/project-add-session":
+            self._handle_project_add_session(parsed)
             return
         if parsed.path == "/session":
             self._handle_session(parsed)
@@ -163,6 +183,38 @@ class ScholarCheckHandler(BaseHTTPRequestHandler):
             self._send_html(render_not_found(), HTTPStatus.NOT_FOUND)
             return
         self._send_html(render_session(metadata, query, result, manual_checks=load_manual_checks()))
+
+    def _handle_project(self, parsed) -> None:
+        params = parse_qs(parsed.query)
+        project_id = _first_param(params, "id")
+        try:
+            project = load_project(resolve_project_path(project_id))
+        except (FileNotFoundError, ValueError):
+            self._send_html(render_not_found(), HTTPStatus.NOT_FOUND)
+            return
+        self._send_html(render_project(project))
+
+    def _handle_create_project(self, parsed) -> None:
+        params = parse_qs(parsed.query)
+        name = _first_param(params, "name")
+        if not name:
+            self._send_html(render_projects(error="프로젝트 이름을 입력해 주세요."), HTTPStatus.BAD_REQUEST)
+            return
+        description = _first_param(params, "description")
+        session_id = _first_param(params, "session")
+        path = create_project(name, description=description, session_ids=[session_id] if session_id else [])
+        self._send_redirect(f"/project?id={path.stem}")
+
+    def _handle_project_add_session(self, parsed) -> None:
+        params = parse_qs(parsed.query)
+        project_id = _first_param(params, "project")
+        session_id = _first_param(params, "session")
+        try:
+            add_session_to_project(project_id, session_id)
+        except (FileNotFoundError, ValueError):
+            self._send_html(render_not_found(), HTTPStatus.NOT_FOUND)
+            return
+        self._send_redirect(f"/project?id={_escape(project_id)}")
 
     def _handle_report(self, parsed) -> None:
         params = parse_qs(parsed.query)
@@ -422,6 +474,7 @@ def render_session(
             <a class="button-link secondary" href="/workbook.xlsx?session={_escape(session_id)}">Excel 통합 파일</a>
             <a class="button-link secondary" href="/citations?session={_escape(session_id)}">참고문헌 후보 보기</a>
             <a class="button-link secondary" href="/matrix?session={_escape(session_id)}">선행연구 매트릭스</a>
+            <a class="button-link secondary" href="/projects">프로젝트에 묶기</a>
             <a class="button-link secondary" href="/search?{_escape(raw_query)}">같은 조건으로 다시 검색</a>
             <a class="button-link secondary" href="/sessions">저장 세션 목록</a>
           </div>
@@ -463,12 +516,13 @@ def render_sessions() -> str:
                   <td><a href="/workbook.xlsx?session={_escape(session_id)}">Excel</a></td>
                   <td><a href="/citations?session={_escape(session_id)}">참고문헌 후보</a></td>
                   <td><a href="/matrix?session={_escape(session_id)}">매트릭스</a></td>
+                  <td><a href="/projects?session={_escape(session_id)}">프로젝트</a></td>
                 </tr>
                 """
             )
         content = f"""
         <div class="table-wrap"><table>
-          <thead><tr><th>주제</th><th>논문 수</th><th>세션</th><th>리포트</th><th>Excel</th><th>참고문헌</th><th>매트릭스</th></tr></thead>
+          <thead><tr><th>주제</th><th>논문 수</th><th>세션</th><th>리포트</th><th>Excel</th><th>참고문헌</th><th>매트릭스</th><th>프로젝트</th></tr></thead>
           <tbody>{''.join(rows)}</tbody>
         </table></div>
         """
@@ -479,10 +533,125 @@ def render_sessions() -> str:
           <div class="inner">
             <p class="eyebrow">검색 세션</p>
             <h1>저장된 검색 세션</h1>
-            <p><a href="/">검색 화면으로 돌아가기</a></p>
+            <p><a href="/">검색 화면으로 돌아가기</a> / <a href="/projects">프로젝트 보기</a></p>
           </div>
         </section>
         <main class="inner results">{content}</main>
+        """,
+    )
+
+
+def render_projects(error: str = "", session_id: str = "") -> str:
+    project_paths = list_projects()
+    content = ""
+    if not project_paths:
+        content = '<p class="empty">아직 저장된 연구 프로젝트가 없습니다.</p>'
+    else:
+        rows = []
+        for path in project_paths:
+            try:
+                project = load_project(path)
+            except (OSError, ValueError):
+                continue
+            sessions = load_project_sessions(project)
+            rows.append(
+                f"""
+                <tr>
+                  <td><strong>{_escape(project.name)}</strong><span>{_screen(project.description)}</span></td>
+                  <td>{len(project.session_ids)}개</td>
+                  <td>{sum(len(result.records) for _, _, result in sessions)}건</td>
+                  <td><a href="/project?id={_escape(project.project_id)}">열기</a></td>
+                  <td>{f'<a href="/project-add-session?project={_escape(project.project_id)}&session={_escape(session_id)}">세션 추가</a>' if session_id else '-'}</td>
+                </tr>
+                """
+            )
+        content = f"""
+        <div class="table-wrap"><table>
+          <thead><tr><th>프로젝트</th><th>참조 세션</th><th>자동 검증 논문</th><th>상세</th><th>추가</th></tr></thead>
+          <tbody>{''.join(rows)}</tbody>
+        </table></div>
+        """
+    return _page(
+        "ScholarCheck Projects",
+        f"""
+        <section class="search-band compact">
+          <div class="inner">
+            <p class="eyebrow">연구 프로젝트</p>
+            <h1>프로젝트 관리</h1>
+            <p><a href="/sessions">저장 세션 보기</a></p>
+          </div>
+        </section>
+        <main class="inner results">
+          <section class="manual-form">
+            <h2>새 프로젝트 만들기</h2>
+            {f'<p class="error">{_escape(error)}</p>' if error else ''}
+            <form method="get" action="/create-project">
+              {f'<input type="hidden" name="session" value="{_escape(session_id)}">' if session_id else ''}
+              <label><span>프로젝트 이름</span><input name="name" required></label>
+              <label><span>설명</span><input name="description"></label>
+              <button type="submit">프로젝트 저장</button>
+            </form>
+          </section>
+          <section class="result-section">
+            <div class="section-title"><h2>저장된 프로젝트</h2><span>{len(project_paths)}개</span></div>
+            {content}
+          </section>
+        </main>
+        """,
+    )
+
+
+def render_project(project) -> str:
+    sessions = load_project_sessions(project)
+    session_rows = []
+    for metadata, query, result in sessions:
+        session_id = metadata.get("session_id", UNKNOWN)
+        session_rows.append(
+            f"""
+            <tr>
+              <td><strong>{_escape(query.topic)}</strong><span>{_screen(metadata.get("saved_at", UNKNOWN))}</span></td>
+              <td>{len(result.records)}건</td>
+              <td>{len(result.domestic_links)}개</td>
+              <td><a href="/session?id={_escape(session_id)}">세션 열기</a></td>
+              <td><a href="/report.html?session={_escape(session_id)}">HTML</a></td>
+              <td><a href="/workbook.xlsx?session={_escape(session_id)}">Excel</a></td>
+            </tr>
+            """
+        )
+    missing_count = max(len(project.session_ids) - len(sessions), 0)
+    missing_note = (
+        f'<p class="empty">참조된 세션 중 {missing_count}개를 찾지 못했습니다. 프로젝트가 가짜 세션을 만들지는 않습니다.</p>'
+        if missing_count
+        else ""
+    )
+    table = f"""
+    <div class="table-wrap"><table>
+      <thead><tr><th>세션 주제</th><th>자동 검증 논문</th><th>국내 DB 링크</th><th>세션</th><th>HTML</th><th>Excel</th></tr></thead>
+      <tbody>{''.join(session_rows)}</tbody>
+    </table></div>
+    """ if session_rows else '<p class="empty">아직 연결된 세션이 없습니다.</p>'
+    return _page(
+        f"ScholarCheck Project - {_escape(project.name)}",
+        f"""
+        <section class="search-band compact">
+          <div class="inner">
+            <p class="eyebrow">연구 프로젝트</p>
+            <h1>{_escape(project.name)}</h1>
+            <p class="lead">{_screen(project.description)}</p>
+            <p><a href="/projects">프로젝트 목록</a> / <a href="/sessions">세션 추가하러 가기</a></p>
+          </div>
+        </section>
+        <main class="inner results">
+          <section class="result-section">
+            <h2>프로젝트 원칙</h2>
+            <p class="section-note">프로젝트는 저장 세션 ID만 참조합니다. 세션 원본 데이터와 국내 DB 수동 기록을 자동 검증 논문 목록에 섞지 않습니다.</p>
+          </section>
+          <section class="result-section">
+            <div class="section-title"><h2>연결된 세션</h2><span>{len(project.session_ids)}개</span></div>
+            {missing_note}
+            {table}
+          </section>
+        </main>
         """,
     )
 
