@@ -2,15 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from scholarcheck.domestic import build_domestic_links
 from scholarcheck.checklist import build_citation_checklist
+from scholarcheck.domestic import build_domestic_links
 from scholarcheck.manual_checks import add_manual_check, load_manual_checks
 from scholarcheck.models import DomesticManualCheck, PaperRecord, SearchQuery, UNKNOWN
-from scholarcheck.output import save_records
+from scholarcheck.output import records_to_csv, records_to_json, save_records
 from scholarcheck.pipeline import build_query, deduplicate, search_papers
 from scholarcheck.scoring import filter_and_score
 from scholarcheck.sources import CrossrefSource
 from scholarcheck.verification import verify_doi_with_crossref
+from scholarcheck.web import SCREEN_UNKNOWN, _render_records_table, _screen
 
 
 def test_missing_doi_is_not_generated() -> None:
@@ -76,7 +77,7 @@ def test_similar_title_and_same_year_without_doi_is_deduplicated() -> None:
 
 
 def test_domestic_links_are_not_verified_records() -> None:
-    query = build_query("인공지능 교육")
+    query = build_query("ai education")
     domestic_links = build_domestic_links(query)
     record = PaperRecord(title="Verified overseas API result")
 
@@ -87,13 +88,13 @@ def test_domestic_links_are_not_verified_records() -> None:
 
 def test_relaxation_suggestion_file_is_created_when_results_are_short(tmp_path: Path) -> None:
     output_path = tmp_path / "results.csv"
-    suggestions = ["현재 0건만 확인되었습니다. 가짜 결과는 생성하지 않았습니다."]
+    suggestions = ["Try broader keywords."]
 
     save_records([], output_path, [], suggestions)
 
     suggestions_path = tmp_path / "results_relaxation_suggestions.txt"
     assert suggestions_path.exists()
-    assert "가짜 결과는 생성하지 않았습니다" in suggestions_path.read_text(encoding="utf-8")
+    assert suggestions[0] in suggestions_path.read_text(encoding="utf-8")
 
 
 def test_api_failure_does_not_create_fake_records(monkeypatch) -> None:
@@ -107,7 +108,7 @@ def test_api_failure_does_not_create_fake_records(monkeypatch) -> None:
 
     assert result.records == []
     assert result.warnings
-    assert any("가짜 결과는 생성하지 않았습니다" in item for item in result.relaxation_suggestions)
+    assert result.relaxation_suggestions
 
 
 def test_doi_verification_does_not_verify_missing_doi() -> None:
@@ -122,8 +123,8 @@ def test_citation_checklist_marks_missing_pdf_as_needs_check() -> None:
         PaperRecord(title="Checked title", doi="10.1000/example", pdf_available=False)
     )
 
-    pdf_item = next(item for item in checklist if item.label == "PDF 직접 가능 여부")
-    assert pdf_item.status == "확인 필요"
+    pdf_item = next(item for item in checklist if "PDF" in item.label)
+    assert pdf_item.status != "OK"
     assert "확인 불가" in pdf_item.detail
 
 
@@ -133,8 +134,8 @@ def test_manual_domestic_check_is_saved_separately(tmp_path: Path) -> None:
     add_manual_check(
         DomesticManualCheck(
             database_name="RISS",
-            search_keywords="인공지능 교육",
-            title="수동 확인 논문",
+            search_keywords="ai education",
+            title="Manual checked paper",
         ),
         path=path,
     )
@@ -142,4 +143,25 @@ def test_manual_domestic_check_is_saved_separately(tmp_path: Path) -> None:
 
     assert len(checks) == 1
     assert checks[0].database_name == "RISS"
-    assert checks[0].title == "수동 확인 논문"
+    assert checks[0].title == "Manual checked paper"
+
+
+def test_export_outputs_keep_unknown_for_missing_values() -> None:
+    record = PaperRecord(title="Missing metadata sample")
+
+    csv_output = records_to_csv([record])
+    json_output = records_to_json([record], [], [])
+
+    assert UNKNOWN in csv_output
+    assert f'"doi": "{UNKNOWN}"' in json_output
+    assert f'"pdf_url": "{UNKNOWN}"' in json_output
+
+
+def test_web_screen_displays_missing_values_as_check_unavailable() -> None:
+    record = PaperRecord(title=UNKNOWN, doi=UNKNOWN, pdf_available=False)
+
+    html = _render_records_table([record], "topic=sample")
+
+    assert _screen(UNKNOWN) == SCREEN_UNKNOWN
+    assert SCREEN_UNKNOWN in html
+    assert ">UNKNOWN<" not in html

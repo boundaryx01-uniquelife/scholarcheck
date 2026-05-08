@@ -16,10 +16,12 @@ from scholarcheck.verification import verify_doi_with_crossref
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
+SCREEN_UNKNOWN = "확인 불가"
+PDF_UNKNOWN = "확인 불가 / 기관접속 필요 가능성 있음"
 
 
 class ScholarCheckHandler(BaseHTTPRequestHandler):
-    server_version = "ScholarCheckWeb/0.4"
+    server_version = "ScholarCheckWeb/0.5"
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -53,13 +55,11 @@ class ScholarCheckHandler(BaseHTTPRequestHandler):
                 title=_first_param(params, "title"),
                 landing_page_url=_first_param(params, "landing_page_url") or UNKNOWN,
                 doi=_first_param(params, "doi") or UNKNOWN,
-                pdf_status=_first_param(params, "pdf_status")
-                or "확인 불가 / 기관접속 필요 가능성 있음",
+                pdf_status=_first_param(params, "pdf_status") or PDF_UNKNOWN,
                 notes=_first_param(params, "notes"),
             )
         )
-        redirect_to = _first_param(params, "redirect_to") or "/"
-        self._send_redirect(redirect_to)
+        self._send_redirect(_first_param(params, "redirect_to") or "/")
 
     def _handle_search_like(self, parsed) -> None:
         params = parse_qs(parsed.query)
@@ -79,11 +79,7 @@ class ScholarCheckHandler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/download.csv":
-            self._send_download(
-                records_to_csv(result.records),
-                "scholarcheck_results.csv",
-                "text/csv; charset=utf-8",
-            )
+            self._send_download(records_to_csv(result.records), "scholarcheck_results.csv", "text/csv; charset=utf-8")
             return
         if parsed.path == "/download.json":
             payload = records_to_json(
@@ -170,8 +166,8 @@ def render_home(error: str = "") -> str:
           <h2>검증 원칙</h2>
           <ul>
             <li>논문 존재 여부를 최종 보증하지 않습니다. 최종 인용 전 원문 페이지 확인이 필요합니다.</li>
-            <li>DOI, PDF, 초록, 오픈액세스 여부는 API가 제공한 값만 표시합니다.</li>
-            <li>국내 DB는 자동 검증 논문 목록에 섞지 않고 직접 확인 링크와 수동 기록만 제공합니다.</li>
+            <li>내부 데이터와 CSV/JSON에서는 누락값을 <code>UNKNOWN</code>으로 유지합니다.</li>
+            <li>사용자 화면에서는 누락값을 <code>{SCREEN_UNKNOWN}</code>로 표시합니다.</li>
           </ul>
         </section>
         """,
@@ -245,7 +241,7 @@ def render_detail(
         <section class="search-band compact">
           <div class="inner">
             <p class="eyebrow">검색 결과 상세 보기</p>
-            <h1>{_escape(paper.title)}</h1>
+            <h1>{_screen(paper.title)}</h1>
             <p><a href="/search?{_escape(back_query)}">검색 결과로 돌아가기</a></p>
           </div>
         </section>
@@ -273,8 +269,8 @@ def render_verification_message(verification) -> str:
     return f"""
     <section class="suggestions">
       <h2>DOI 재검증 결과</h2>
-      <p><strong>{_escape(verification.status)}</strong>: {_escape(verification.message)}</p>
-      <p>DOI: {_escape(verification.doi)} / Crossref 제목: {_escape(verification.title)}</p>
+      <p><strong>{_screen(verification.status)}</strong>: {_screen(verification.message)}</p>
+      <p>DOI: {_screen(verification.doi)} / Crossref 제목: {_screen(verification.title)}</p>
     </section>
     """
 
@@ -327,13 +323,13 @@ def _render_records_table(records: list[PaperRecord], raw_query: str) -> str:
         rows.append(
             f"""
             <tr>
-              <td><strong>{_escape(record.title)}</strong><span>{_escape(record.source_api)}</span></td>
-              <td>{_escape(record.authors_display)}</td>
-              <td>{_escape(record.year_display)}</td>
+              <td><strong>{_screen(record.title)}</strong><span>{_screen(record.source_api)}</span></td>
+              <td>{_screen(record.authors_display)}</td>
+              <td>{_screen(record.year_display)}</td>
               <td>{_doi_link(record.doi)}</td>
-              <td>{"가능" if record.pdf_available else "확인 불가"}</td>
-              <td>{_escape(record.open_access_display)}</td>
-              <td>{_escape(record.citation_display)}</td>
+              <td>{"가능" if record.pdf_available else SCREEN_UNKNOWN}</td>
+              <td>{_screen(record.open_access_display)}</td>
+              <td>{_screen(record.citation_display)}</td>
               <td>{"고전 고인용" if record.classic_highly_cited else "-"}</td>
               <td class="score">{record.total_score:.2f}</td>
               <td><a href="/detail?{_escape(detail_query)}">상세 보기</a></td>
@@ -358,7 +354,7 @@ def _render_detail_table(paper: PaperRecord) -> str:
         ("DOI", paper.doi),
         ("원문 URL", paper.landing_page_url),
         ("PDF URL", paper.pdf_url),
-        ("다운로드 상태", "PDF 직접 가능" if paper.pdf_available else "확인 불가 / 기관접속 필요 가능성 있음"),
+        ("다운로드 상태", "PDF 직접 가능" if paper.pdf_available else PDF_UNKNOWN),
         ("오픈액세스 여부", paper.open_access_display),
         ("인용 수", paper.citation_display),
         ("초록", paper.abstract),
@@ -369,13 +365,13 @@ def _render_detail_table(paper: PaperRecord) -> str:
         ("notes", "; ".join(paper.ranking_notes) or UNKNOWN),
         ("classic_candidate 여부", "YES" if paper.classic_highly_cited else "NO"),
     ]
-    body = "".join(f"<tr><th>{_escape(label)}</th><td>{_link_value(value)}</td></tr>" for label, value in rows)
+    body = "".join(f"<tr><th>{_escape(label)}</th><td>{_screen_link(value)}</td></tr>" for label, value in rows)
     return f'<div class="table-wrap detail"><table><tbody>{body}</tbody></table></div>'
 
 
 def _render_checklist(items) -> str:
     rows = "".join(
-        f"<tr><td>{_escape(item.label)}</td><td>{_escape(item.status)}</td><td>{_escape(item.detail)}</td></tr>"
+        f"<tr><td>{_escape(item.label)}</td><td>{_escape(item.status)}</td><td>{_screen(item.detail)}</td></tr>"
         for item in items
     )
     return f'<div class="table-wrap"><table><thead><tr><th>항목</th><th>상태</th><th>내용</th></tr></thead><tbody>{rows}</tbody></table></div>'
@@ -383,7 +379,7 @@ def _render_checklist(items) -> str:
 
 def _render_domestic_table(links: list[DomesticSearchLink]) -> str:
     rows = [
-        f'<tr><td><strong>{_escape(link.database_name)}</strong></td><td>{_escape(link.search_keywords)}</td><td>{_escape(link.result_status)}</td><td>{_escape(link.download_status)}</td><td><a href="{_escape(link.search_url)}" target="_blank" rel="noreferrer">검색 링크 열기</a></td></tr>'
+        f'<tr><td><strong>{_escape(link.database_name)}</strong></td><td>{_screen(link.search_keywords)}</td><td>{_screen(link.result_status)}</td><td>{_screen(link.download_status)}</td><td><a href="{_escape(link.search_url)}" target="_blank" rel="noreferrer">검색 링크 열기</a></td></tr>'
         for link in links
     ]
     return f'<div class="table-wrap"><table><thead><tr><th>DB</th><th>검색어</th><th>상태</th><th>다운로드</th><th>링크</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
@@ -398,7 +394,7 @@ def _render_manual_check_form(query: SearchQuery, raw_query: str) -> str:
         <div class="form-grid">
           <label><span>DB명</span><input name="database_name" placeholder="RISS" required></label>
           <label><span>검색어</span><input name="search_keywords" value="{_escape(' '.join(query.required_keywords or query.keywords))}" required></label>
-          <label><span>PDF 상태</span><input name="pdf_status" value="확인 불가 / 기관접속 필요 가능성 있음"></label>
+          <label><span>PDF 상태</span><input name="pdf_status" value="{PDF_UNKNOWN}"></label>
         </div>
         <label><span>확인한 논문 제목</span><input name="title" required></label>
         <div class="form-grid">
@@ -416,7 +412,7 @@ def _render_manual_checks(checks: list[DomesticManualCheck]) -> str:
     if not checks:
         return '<p class="empty">아직 저장된 국내 DB 수동 확인 기록이 없습니다.</p>'
     rows = "".join(
-        f"<tr><td>{_escape(check.database_name)}</td><td>{_escape(check.title)}</td><td>{_escape(check.doi)}</td><td>{_escape(check.pdf_status)}</td><td>{_escape(check.checked_at)}</td><td>{_escape(check.notes)}</td></tr>"
+        f"<tr><td>{_screen(check.database_name)}</td><td>{_screen(check.title)}</td><td>{_screen(check.doi)}</td><td>{_screen(check.pdf_status)}</td><td>{_screen(check.checked_at)}</td><td>{_screen(check.notes)}</td></tr>"
         for check in reversed(checks[-20:])
     )
     return f'<div class="table-wrap"><table><thead><tr><th>DB</th><th>제목</th><th>DOI</th><th>PDF</th><th>확인일</th><th>메모</th></tr></thead><tbody>{rows}</tbody></table></div>'
@@ -436,20 +432,27 @@ def _render_suggestions(suggestions: list[str]) -> str:
 
 def _doi_link(doi: str) -> str:
     if doi == UNKNOWN:
-        return UNKNOWN
+        return SCREEN_UNKNOWN
     return f'<a href="https://doi.org/{_escape(doi)}" target="_blank" rel="noreferrer">{_escape(doi)}</a>'
 
 
 def _page_link(url: str) -> str:
     if url == UNKNOWN:
-        return UNKNOWN
+        return SCREEN_UNKNOWN
     return f'<a href="{_escape(url)}" target="_blank" rel="noreferrer">열기</a>'
 
 
-def _link_value(value: str) -> str:
+def _screen_link(value: str) -> str:
     if value.startswith("http://") or value.startswith("https://"):
         return _page_link(value)
-    return _escape(value)
+    return _screen(value)
+
+
+def _screen(value: object) -> str:
+    text = str(value).strip()
+    if not text or text == UNKNOWN:
+        return SCREEN_UNKNOWN
+    return _escape(text)
 
 
 def _page(title: str, body: str) -> str:

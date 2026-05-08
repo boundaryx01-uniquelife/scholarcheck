@@ -92,6 +92,18 @@ ScholarCheck의 DOI 재검증은 `scholarcheck/verification.py`의 `verify_doi_w
 
 참고: `VERIFIED`, `PARTIAL_MATCH`, `MISMATCH`, `NO_DOI`, `CHECK_FAILED` 같은 대문자 상태명은 현재 코드의 반환값이 아닙니다. 사용자 화면과 저장 데이터에서는 위 소문자 상태값을 기준으로 해석합니다.
 
+## 누락값 표시 규칙
+
+ScholarCheck는 확인되지 않은 값을 임의로 채우지 않습니다. 누락값은 출력 위치에 따라 다음처럼 표시합니다.
+
+| 위치 | 표시값 |
+| --- | --- |
+| 내부 데이터 | `UNKNOWN` |
+| CSV/JSON 출력 | `UNKNOWN` |
+| 웹 사용자 화면 | 확인 불가 |
+
+PDF URL을 자동 확인하지 못한 경우 웹 화면에서는 `확인 불가 / 기관접속 필요 가능성 있음`으로 표시하며, CSV/JSON에서는 원본 필드의 `UNKNOWN` 값을 유지합니다.
+
 ## 웹 UI 실행
 
 ```powershell
