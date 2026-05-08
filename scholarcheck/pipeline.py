@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from scholarcheck.http import JsonHttpClient
+from scholarcheck.domestic import build_domestic_links
 from scholarcheck.keywords import extract_keywords
 from scholarcheck.models import PaperRecord, SearchQuery, SearchResult, UNKNOWN
 from scholarcheck.scoring import apply_scores
@@ -45,7 +46,11 @@ def search_papers(query: SearchQuery) -> SearchResult:
     if errors:
         for record in scored:
             record.caution = f"{record.caution}; Source warning: {' | '.join(errors)}"
-    return SearchResult(records=scored[: query.limit], warnings=errors)
+    return SearchResult(
+        records=scored[: query.limit],
+        domestic_links=build_domestic_links(query),
+        warnings=errors,
+    )
 
 
 def deduplicate(records: list[PaperRecord]) -> list[PaperRecord]:

@@ -16,6 +16,15 @@ def _first_text(value: object) -> str:
     return UNKNOWN
 
 
+def _clean_text(value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        return UNKNOWN
+    cleaned = value.strip()
+    if cleaned.lower() in {"none", "null", "unknown", "n/a", "na"}:
+        return UNKNOWN
+    return cleaned
+
+
 def _year_from_parts(parts: object) -> int | None:
     if not isinstance(parts, dict):
         return None
@@ -34,7 +43,10 @@ def _year_from_parts(parts: object) -> int | None:
 def _normalize_doi(value: object) -> str:
     if not isinstance(value, str) or not value.strip():
         return UNKNOWN
-    return value.strip().lower()
+    normalized = value.strip().lower()
+    if normalized in {"none", "null", "unknown", "n/a", "na"}:
+        return UNKNOWN
+    return normalized
 
 
 def _author_names_crossref(authors: object) -> list[str]:
@@ -223,12 +235,12 @@ class OpenAlexSource:
         publisher = UNKNOWN
 
         if isinstance(primary_location, dict):
-            landing_page_url = str(primary_location.get("landing_page_url", "")).strip() or UNKNOWN
-            pdf_url = str(primary_location.get("pdf_url", "")).strip() or UNKNOWN
+            landing_page_url = _clean_text(primary_location.get("landing_page_url"))
+            pdf_url = _clean_text(primary_location.get("pdf_url"))
             source = primary_location.get("source")
             if isinstance(source, dict):
-                venue = str(source.get("display_name", "")).strip() or UNKNOWN
-                publisher = str(source.get("host_organization_name", "")).strip() or UNKNOWN
+                venue = _clean_text(source.get("display_name"))
+                publisher = _clean_text(source.get("host_organization_name"))
 
         verified_fields = ["title", "source_api"]
         for field_name, value in [
@@ -248,7 +260,7 @@ class OpenAlexSource:
             year = None
 
         return PaperRecord(
-            title=str(item.get("title", "")).strip() or UNKNOWN,
+            title=_clean_text(item.get("title")),
             authors=_author_names_openalex(item.get("authorships")),
             year=year,
             venue=venue,

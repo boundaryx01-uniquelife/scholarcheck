@@ -5,7 +5,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from scholarcheck.output import print_table, save_records
+from scholarcheck.output import print_domestic_links, print_table, save_records
 from scholarcheck.pipeline import build_query, search_papers
 
 
@@ -52,12 +52,14 @@ def main() -> None:
         print(f"Warnings: {' | '.join(result.warnings)}")
     print()
     print_table(result.records)
+    print()
+    print_domestic_links(result.domestic_links)
 
     output_path = args.output
     if output_path is None:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_path = Path("outputs") / f"scholarcheck_{timestamp}.{args.format}"
 
-    saved_path = save_records(result.records, output_path)
+    saved_path = save_records(result.records, output_path, result.domestic_links)
     print()
     print(f"Saved: {saved_path}")

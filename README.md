@@ -18,6 +18,7 @@
 - 관련성, 최신성, 활용 가능성 점수 계산
 - 표 출력
 - CSV 또는 JSON 저장
+- 국내 DB 직접 확인용 검색 링크 생성: RISS, KCI, DBpia, KISS, e-Article
 
 ## 실행
 
@@ -37,4 +38,6 @@ C:\Users\user\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\py
 
 ## 주의
 
-국내 논문 전용 API(RISS/KCI/DBpia/KISS 등)는 인증키나 기관 권한이 필요한 경우가 많아 MVP에는 아직 직접 연동하지 않았습니다. 현재는 메타데이터의 출판사, 기관, 링크, 제목 정보를 바탕으로 국내/해외를 보수적으로 구분합니다.
+국내 논문 전용 DB(RISS/KCI/DBpia/KISS/e-Article)는 자동 크롤링하지 않습니다. ScholarCheck는 검색어를 URL 인코딩한 직접 확인 링크만 생성하며, 이 링크들은 검증된 논문 목록에 섞지 않습니다.
+
+국내 DB 링크의 다운로드 가능 여부는 항상 `확인 불가 / 기관접속 필요 가능성 있음`으로 표시합니다. 사용자는 각 DB에서 논문 존재 여부, 서지정보, 원문 접근 권한을 직접 확인해야 합니다.

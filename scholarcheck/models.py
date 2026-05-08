@@ -51,4 +51,15 @@ class PaperRecord:
 @dataclass(slots=True)
 class SearchResult:
     records: list[PaperRecord]
+    domestic_links: list[DomesticSearchLink] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class DomesticSearchLink:
+    database_name: str
+    search_keywords: str
+    search_url: str
+    result_status: str = "국내 DB 직접 확인 필요"
+    download_status: str = "확인 불가 / 기관접속 필요 가능성 있음"
+    caution: str = "자동 크롤링하지 않음. 링크에서 사용자가 직접 논문 존재 여부와 원문 접근 권한을 확인해야 함."
