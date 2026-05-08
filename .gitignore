@@ -5,3 +5,6 @@ outputs/*.csv
 outputs/*.json
 !.gitkeep
 data/domestic_manual_checks.json
+data/sessions/
+data/projects/
+data/backups/

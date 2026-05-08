@@ -244,3 +244,4 @@ Missing session files are listed as missing references. ScholarCheck does not cr
 - [Architecture](docs/architecture.md): 주요 모듈, 데이터 경계, 저장 구조, 실패 처리
 - [Development History](docs/development_history.md): MVP 단계별 변경 이력
 - [Release Checklist](docs/release_checklist.md): 릴리즈 전 검증 항목
+- [Vultr Deployment Guide](docs/vultr_deployment.md): Vultr Ubuntu 서버 배포, systemd, Nginx 설정

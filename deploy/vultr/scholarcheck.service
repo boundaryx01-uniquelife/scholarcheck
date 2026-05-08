@@ -1,0 +1,17 @@
+[Unit]
+Description=ScholarCheck web UI
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=scholarcheck
+Group=scholarcheck
+WorkingDirectory=/opt/scholarcheck/current
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/scholarcheck/current/.venv/bin/python -m scholarcheck.web --host 127.0.0.1 --port 8765
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
