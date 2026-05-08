@@ -111,16 +111,24 @@ def _normalize_keywords(keywords: list[str] | None) -> list[str]:
         return []
 
     normalized: list[str] = []
+    seen: set[str] = set()
     for keyword in keywords:
         cleaned = re.sub(r"\s+", " ", keyword.strip())
-        if cleaned and cleaned.lower() not in {item.lower() for item in normalized}:
+        key = cleaned.lower()
+        if cleaned and key not in seen:
             normalized.append(cleaned)
+            seen.add(key)
     return normalized
 
 
 def _dedupe_key(record: PaperRecord) -> str:
     if record.doi != UNKNOWN:
         return f"doi:{record.doi.lower()}"
-    title = re.sub(r"\s+", " ", record.title.lower()).strip()
+    title = _normalize_title_for_dedupe(record.title)
     year = record.year or "unknown"
     return f"title:{title}:{year}"
+
+
+def _normalize_title_for_dedupe(title: str) -> str:
+    normalized = re.sub(r"[^0-9a-zA-Z가-힣]+", " ", title.lower())
+    return re.sub(r"\s+", " ", normalized).strip()

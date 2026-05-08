@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import json
 from dataclasses import asdict
 from pathlib import Path
@@ -118,32 +119,48 @@ def save_records(
 ) -> Path:
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.suffix.lower() == ".json":
-        _save_json(records, domestic_links or [], relaxation_suggestions or [], path)
+        path.write_text(
+            records_to_json(records, domestic_links or [], relaxation_suggestions or []),
+            encoding="utf-8",
+        )
         return path
     if path.suffix.lower() == ".csv":
-        _save_csv(records, path)
+        path.write_text(records_to_csv(records), encoding="utf-8-sig", newline="")
         if domestic_links is not None:
-            _save_domestic_csv(domestic_links, _domestic_csv_path(path))
+            _domestic_csv_path(path).write_text(
+                domestic_links_to_csv(domestic_links),
+                encoding="utf-8-sig",
+                newline="",
+            )
         if relaxation_suggestions:
             _save_suggestions_txt(relaxation_suggestions, _suggestions_txt_path(path))
         return path
     raise ValueError("Output path must end with .csv or .json")
 
 
-def _save_csv(records: list[PaperRecord], path: Path) -> None:
-    with path.open("w", encoding="utf-8-sig", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=FIELDNAMES)
-        writer.writeheader()
-        for record in records:
-            writer.writerow(_record_to_row(record))
+def records_to_csv(records: list[PaperRecord]) -> str:
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=FIELDNAMES)
+    writer.writeheader()
+    for record in records:
+        writer.writerow(_record_to_row(record))
+    return output.getvalue()
 
 
-def _save_json(
+def domestic_links_to_csv(links: list[DomesticSearchLink]) -> str:
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=DOMESTIC_FIELDNAMES)
+    writer.writeheader()
+    for link in links:
+        writer.writerow(asdict(link))
+    return output.getvalue()
+
+
+def records_to_json(
     records: list[PaperRecord],
     domestic_links: list[DomesticSearchLink],
     relaxation_suggestions: list[str],
-    path: Path,
-) -> None:
+) -> str:
     verified_records = []
     for record in records:
         data = asdict(record)
@@ -155,19 +172,7 @@ def _save_json(
         "search_condition_relaxation_suggestions": relaxation_suggestions,
         "domestic_db_direct_check_required": [asdict(link) for link in domestic_links],
     }
-
-    path.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-
-
-def _save_domestic_csv(links: list[DomesticSearchLink], path: Path) -> None:
-    with path.open("w", encoding="utf-8-sig", newline="") as file:
-        writer = csv.DictWriter(file, fieldnames=DOMESTIC_FIELDNAMES)
-        writer.writeheader()
-        for link in links:
-            writer.writerow(asdict(link))
+    return json.dumps(payload, ensure_ascii=False, indent=2)
 
 
 def _save_suggestions_txt(suggestions: list[str], path: Path) -> None:
