@@ -20,6 +20,7 @@ from scholarcheck.matrix import MATRIX_NOTICE, build_literature_matrix
 from scholarcheck.models import DomesticManualCheck, DomesticSearchLink, PaperRecord, SearchQuery, SearchResult, UNKNOWN
 from scholarcheck.output import records_to_csv, records_to_json
 from scholarcheck.pipeline import build_query, parse_keyword_argument, search_papers
+from scholarcheck.project_exports import build_project_excel_workbook, build_project_export_data, render_project_html_report
 from scholarcheck.projects import (
     add_session_to_project,
     create_project,
@@ -85,6 +86,12 @@ class ScholarCheckHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/workbook.xlsx":
             self._handle_workbook(parsed)
+            return
+        if parsed.path == "/project-report.html":
+            self._handle_project_report(parsed)
+            return
+        if parsed.path == "/project-workbook.xlsx":
+            self._handle_project_workbook(parsed)
             return
         if parsed.path == "/citations":
             self._handle_citations(parsed)
@@ -241,6 +248,36 @@ class ScholarCheckHandler(BaseHTTPRequestHandler):
         self._send_binary_download(
             build_excel_workbook(metadata, query, result, load_manual_checks()),
             f"scholarcheck_workbook_{metadata['session_id']}.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+    def _handle_project_report(self, parsed) -> None:
+        params = parse_qs(parsed.query)
+        project_id = _first_param(params, "project")
+        try:
+            project = load_project(resolve_project_path(project_id))
+        except (FileNotFoundError, ValueError):
+            self._send_html(render_not_found(), HTTPStatus.NOT_FOUND)
+            return
+        data = build_project_export_data(project, load_manual_checks())
+        self._send_download(
+            render_project_html_report(data),
+            f"scholarcheck_project_{project.project_id}.html",
+            "text/html; charset=utf-8",
+        )
+
+    def _handle_project_workbook(self, parsed) -> None:
+        params = parse_qs(parsed.query)
+        project_id = _first_param(params, "project")
+        try:
+            project = load_project(resolve_project_path(project_id))
+        except (FileNotFoundError, ValueError):
+            self._send_html(render_not_found(), HTTPStatus.NOT_FOUND)
+            return
+        data = build_project_export_data(project, load_manual_checks())
+        self._send_binary_download(
+            build_project_excel_workbook(data),
+            f"scholarcheck_project_{project.project_id}.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         )
 
@@ -648,6 +685,11 @@ def render_project(project) -> str:
           </section>
           <section class="result-section">
             <div class="section-title"><h2>연결된 세션</h2><span>{len(project.session_ids)}개</span></div>
+            <div class="actions">
+              <a class="button-link" href="/project-report.html?project={_escape(project.project_id)}">Project HTML Report</a>
+              <a class="button-link secondary" href="/project-workbook.xlsx?project={_escape(project.project_id)}">Project Excel Workbook</a>
+            </div>
+            <p class="section-note">Project exports combine linked sessions without editing session source files. Duplicate papers are marked as duplicate candidates instead of being deleted.</p>
             {missing_note}
             {table}
           </section>

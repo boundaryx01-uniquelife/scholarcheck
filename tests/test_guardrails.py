@@ -25,6 +25,11 @@ from scholarcheck.projects import (
     load_project_sessions,
     project_to_json,
 )
+from scholarcheck.project_exports import (
+    build_project_excel_workbook,
+    build_project_export_data,
+    render_project_html_report,
+)
 from scholarcheck.scoring import filter_and_score
 from scholarcheck.reports import render_professor_report
 from scholarcheck.sessions import load_search_session, save_search_session
@@ -528,3 +533,62 @@ def test_web_project_views_keep_session_and_manual_records_separated(tmp_path: P
     assert "AI education sample" not in project_html
     assert "세션 열기" in project_html
     assert "project-add-session" in projects_html
+def test_project_export_marks_duplicates_without_dropping_records(tmp_path: Path, monkeypatch) -> None:
+    session_dir = tmp_path / "sessions"
+    query_a = build_query("ai education")
+    query_b = build_query("teacher ai education")
+    result_a = SearchResult(records=[PaperRecord(title="AI education sample", year=2024, doi="10.1000/example")])
+    result_b = SearchResult(records=[PaperRecord(title="AI education sample revised", year=2024, doi="10.1000/example")])
+    session_a = save_search_session(query_a, result_a, session_dir=session_dir)
+    session_b = save_search_session(query_b, result_b, session_dir=session_dir)
+    original_a = session_a.read_text(encoding="utf-8")
+    original_b = session_b.read_text(encoding="utf-8")
+    project = load_project(
+        create_project(
+            "AI education review",
+            session_ids=[session_a.stem, session_b.stem],
+            project_dir=tmp_path / "projects",
+        )
+    )
+
+    monkeypatch.setattr(
+        "scholarcheck.project_exports.load_project_sessions",
+        lambda loaded_project: load_project_sessions(loaded_project, session_dir=session_dir),
+    )
+
+    data = build_project_export_data(project, manual_checks=[])
+    html = render_project_html_report(data)
+
+    assert len(data.paper_rows) == 2
+    assert [row.duplicate_candidate for row in data.paper_rows] == ["YES", "YES"]
+    assert "Duplicate Candidates" in html
+    assert html.count("10.1000/example") >= 2
+    assert session_a.read_text(encoding="utf-8") == original_a
+    assert session_b.read_text(encoding="utf-8") == original_b
+
+
+def test_project_excel_workbook_includes_project_sheets_and_missing_sessions(tmp_path: Path, monkeypatch) -> None:
+    project = load_project(
+        create_project(
+            "AI curriculum",
+            session_ids=["missing-session"],
+            project_dir=tmp_path / "projects",
+        )
+    )
+    monkeypatch.setattr("scholarcheck.project_exports.load_project_sessions", lambda _project: [])
+
+    data = build_project_export_data(project, manual_checks=[])
+    output_path = tmp_path / "project.xlsx"
+    output_path.write_bytes(build_project_excel_workbook(data))
+
+    with zipfile.ZipFile(output_path) as workbook:
+        workbook_xml = workbook.read("xl/workbook.xml").decode("utf-8")
+        missing_xml = workbook.read("xl/worksheets/sheet6.xml").decode("utf-8")
+        warnings_xml = workbook.read("xl/worksheets/sheet7.xml").decode("utf-8")
+
+    assert "Integrated Papers" in workbook_xml
+    assert "Duplicate Candidates" in workbook_xml
+    assert "Missing Sessions" in workbook_xml
+    assert "missing-session" in missing_xml
+    assert "no fake session or paper was generated" in missing_xml
+    assert "Duplicate papers are not deleted" in warnings_xml

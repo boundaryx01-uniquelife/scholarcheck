@@ -230,3 +230,10 @@ CLI의 기본 저장 위치는 `outputs/`입니다. CSV 저장 시 국내 DB 직
 ```powershell
 python -m pytest
 ```
+## Project-level integrated exports
+
+Project pages can generate an integrated HTML report and an integrated Excel workbook from all linked saved sessions.
+
+The export combines verified paper rows across sessions, but it does not modify the original session JSON files and does not delete duplicate papers. Possible duplicates are shown only as `duplicate_candidate`.
+
+Missing session files are listed as missing references. ScholarCheck does not create fake sessions, papers, DOI values, authors, venues, or links to fill gaps. Domestic DB manual check records remain separate from the automated overseas API result list.
