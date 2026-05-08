@@ -15,6 +15,7 @@ from scholarcheck.manual_checks import (
     manual_checks_to_csv,
     manual_checks_to_json,
 )
+from scholarcheck.matrix import MATRIX_NOTICE, build_literature_matrix
 from scholarcheck.models import DomesticManualCheck, DomesticSearchLink, PaperRecord, SearchQuery, SearchResult, UNKNOWN
 from scholarcheck.output import records_to_csv, records_to_json
 from scholarcheck.pipeline import build_query, parse_keyword_argument, search_papers
@@ -63,6 +64,9 @@ class ScholarCheckHandler(BaseHTTPRequestHandler):
             return
         if parsed.path == "/citations":
             self._handle_citations(parsed)
+            return
+        if parsed.path == "/matrix":
+            self._handle_matrix(parsed)
             return
         if parsed.path == "/detail":
             self._handle_detail(parsed)
@@ -189,6 +193,26 @@ class ScholarCheckHandler(BaseHTTPRequestHandler):
         query = _query_from_params(params)
         result = search_papers(query)
         self._send_html(render_citations(query, result, raw_query=parsed.query))
+
+    def _handle_matrix(self, parsed) -> None:
+        params = parse_qs(parsed.query)
+        session_id = _first_param(params, "session")
+        if session_id:
+            try:
+                metadata, query, result = load_search_session(resolve_session_path(session_id))
+            except (FileNotFoundError, ValueError):
+                self._send_html(render_not_found(), HTTPStatus.NOT_FOUND)
+                return
+            self._send_html(render_literature_matrix(query, result, session_id=metadata.get("session_id", session_id)))
+            return
+
+        topic = _first_param(params, "topic")
+        if not topic:
+            self._send_html(render_home(error="연구 주제를 입력해 주세요."), HTTPStatus.BAD_REQUEST)
+            return
+        query = _query_from_params(params)
+        result = search_papers(query)
+        self._send_html(render_literature_matrix(query, result, raw_query=parsed.query))
 
     def _handle_manual_check_download(self, path: str) -> None:
         checks = load_manual_checks()
@@ -321,6 +345,7 @@ def render_results(
             <a class="button-link" href="/download.csv?{_escape(raw_query)}">CSV 다운로드</a>
             <a class="button-link secondary" href="/download.json?{_escape(raw_query)}">JSON 다운로드</a>
             <a class="button-link secondary" href="/citations?{_escape(raw_query)}">참고문헌 후보 보기</a>
+            <a class="button-link secondary" href="/matrix?{_escape(raw_query)}">선행연구 매트릭스</a>
             <a class="button-link secondary" href="/save-session?{_escape(raw_query)}">검색 세션 저장</a>
             <a class="button-link secondary" href="/sessions">저장 세션 보기</a>
           </div>
@@ -374,6 +399,7 @@ def render_session(
           <div class="download-actions">
             <a class="button-link" href="/report.html?session={_escape(session_id)}">교수님 검토용 HTML 리포트</a>
             <a class="button-link secondary" href="/citations?session={_escape(session_id)}">참고문헌 후보 보기</a>
+            <a class="button-link secondary" href="/matrix?session={_escape(session_id)}">선행연구 매트릭스</a>
             <a class="button-link secondary" href="/search?{_escape(raw_query)}">같은 조건으로 다시 검색</a>
             <a class="button-link secondary" href="/sessions">저장 세션 목록</a>
           </div>
@@ -413,12 +439,13 @@ def render_sessions() -> str:
                   <td><a href="/session?id={_escape(session_id)}">불러오기</a></td>
                   <td><a href="/report.html?session={_escape(session_id)}">HTML 리포트</a></td>
                   <td><a href="/citations?session={_escape(session_id)}">참고문헌 후보</a></td>
+                  <td><a href="/matrix?session={_escape(session_id)}">매트릭스</a></td>
                 </tr>
                 """
             )
         content = f"""
         <div class="table-wrap"><table>
-          <thead><tr><th>주제</th><th>논문 수</th><th>세션</th><th>리포트</th><th>참고문헌</th></tr></thead>
+          <thead><tr><th>주제</th><th>논문 수</th><th>세션</th><th>리포트</th><th>참고문헌</th><th>매트릭스</th></tr></thead>
           <tbody>{''.join(rows)}</tbody>
         </table></div>
         """
@@ -433,6 +460,66 @@ def render_sessions() -> str:
           </div>
         </section>
         <main class="inner results">{content}</main>
+        """,
+    )
+
+
+def render_literature_matrix(
+    query: SearchQuery,
+    result: SearchResult,
+    *,
+    raw_query: str = "",
+    session_id: str = "",
+) -> str:
+    rows = build_literature_matrix(result.records)
+    if not rows:
+        body = '<p class="empty">선행연구 매트릭스를 만들 자동 검증 논문 결과가 없습니다. 가짜 행을 생성하지 않았습니다.</p>'
+    else:
+        table_rows = []
+        for index, row in enumerate(rows, start=1):
+            table_rows.append(
+                f"""
+                <tr>
+                  <td>{index}</td>
+                  <td><strong>{_screen(row.title)}</strong></td>
+                  <td>{_screen(row.authors)}</td>
+                  <td>{_screen(row.year)}</td>
+                  <td>{_screen(row.venue)}</td>
+                  <td>{_screen(row.doi)}</td>
+                  <td>{_escape(row.research_purpose)}</td>
+                  <td>{_escape(row.research_method)}</td>
+                  <td>{_escape(row.research_subjects)}</td>
+                  <td>{_escape(row.key_findings)}</td>
+                  <td>{_screen(row.relevance_note)}</td>
+                  <td class="memo-cell">{_escape(row.user_memo)}</td>
+                  <td>{_screen(row.verification_note)}</td>
+                </tr>
+                """
+            )
+        body = f"""
+        <div class="table-wrap"><table>
+          <thead><tr><th>#</th><th>논문</th><th>저자</th><th>연도</th><th>학술지/기관</th><th>DOI</th><th>연구목적</th><th>연구방법</th><th>연구대상</th><th>주요결과</th><th>관련성 메모</th><th>사용자 메모</th><th>확인 상태</th></tr></thead>
+          <tbody>{''.join(table_rows)}</tbody>
+        </table></div>
+        """
+    back_link = f"/session?id={_escape(session_id)}" if session_id else f"/search?{_escape(raw_query)}"
+    return _page(
+        f"ScholarCheck Matrix - {_escape(query.topic)}",
+        f"""
+        <section class="search-band compact">
+          <div class="inner">
+            <p class="eyebrow">선행연구 검토표</p>
+            <h1>{_escape(query.topic)}</h1>
+            <p class="lead">{_escape(MATRIX_NOTICE)}</p>
+            <p><a href="{back_link}">이전 화면으로 돌아가기</a></p>
+          </div>
+        </section>
+        <main class="inner results">
+          <section class="result-section">
+            <div class="section-title"><h2>선행연구 매트릭스 초안</h2><span>{len(rows)}건</span></div>
+            {body}
+          </section>
+        </main>
         """,
     )
 

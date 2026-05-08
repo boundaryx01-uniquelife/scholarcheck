@@ -4,6 +4,7 @@ import html
 
 from scholarcheck.citations import build_reference_candidates
 from scholarcheck.manual_checks import load_manual_checks
+from scholarcheck.matrix import MATRIX_NOTICE, build_literature_matrix
 from scholarcheck.models import DomesticManualCheck, SearchQuery, SearchResult, UNKNOWN
 
 
@@ -47,6 +48,9 @@ def render_professor_report(
   {_records_table(result)}
   <h2>Reference Candidates</h2>
   {_citation_candidates_table(result)}
+  <h2>Literature Review Matrix Draft</h2>
+  <p class="notice">{_escape(MATRIX_NOTICE)}</p>
+  {_literature_matrix_table(result)}
   <h2>Domestic DB Direct Check Required</h2>
   {_domestic_table(result)}
   <h2>Domestic Manual Check Records</h2>
@@ -124,6 +128,45 @@ def _manual_checks_table(checks: list[DomesticManualCheck]) -> str:
         for check in checks
     ]
     return _simple_table(["DB", "Keywords", "Title", "DOI", "PDF", "Checked At", "Notes"], rows)
+
+
+def _literature_matrix_table(result: SearchResult) -> str:
+    rows = build_literature_matrix(result.records)
+    if not rows:
+        return "<p>No literature matrix rows were generated. No fake rows were created.</p>"
+    return _simple_table(
+        [
+            "Title",
+            "Authors",
+            "Year",
+            "Venue",
+            "DOI",
+            "Purpose",
+            "Method",
+            "Subjects",
+            "Key Findings",
+            "Relevance",
+            "User Memo",
+            "Verification",
+        ],
+        [
+            [
+                row.title,
+                row.authors,
+                row.year,
+                row.venue,
+                row.doi,
+                row.research_purpose,
+                row.research_method,
+                row.research_subjects,
+                row.key_findings,
+                row.relevance_note,
+                row.user_memo,
+                row.verification_note,
+            ]
+            for row in rows
+        ],
+    )
 
 
 def _notes_list(items: list[str]) -> str:

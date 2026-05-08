@@ -12,6 +12,7 @@ from scholarcheck.manual_checks import (
     manual_checks_to_csv,
     manual_checks_to_json,
 )
+from scholarcheck.matrix import MATRIX_NOTICE, NEEDS_REVIEW, build_literature_matrix
 from scholarcheck.models import DomesticManualCheck, PaperRecord, SearchQuery, SearchResult, UNKNOWN
 from scholarcheck.output import records_to_csv, records_to_json, save_records
 from scholarcheck.pipeline import build_query, deduplicate, search_papers
@@ -27,6 +28,7 @@ from scholarcheck.web import (
     render_citations,
     render_detail,
     render_home,
+    render_literature_matrix,
     render_results,
     render_session,
 )
@@ -353,3 +355,38 @@ def test_web_citation_candidate_view_is_marked_as_candidate_not_final() -> None:
     assert "참고문헌 후보안" in html
     assert "최종 확정 인용이 아니며" in html
     assert UNKNOWN in html
+
+
+def test_literature_matrix_does_not_infer_method_subjects_or_findings() -> None:
+    rows = build_literature_matrix(
+        [
+            PaperRecord(
+                title="AI education sample",
+                authors=["Kim A"],
+                year=2024,
+                venue="Journal of AI Education",
+                doi=UNKNOWN,
+                abstract="This abstract mentions a classroom study but should not be summarized.",
+            )
+        ]
+    )
+
+    assert len(rows) == 1
+    assert rows[0].research_purpose == NEEDS_REVIEW
+    assert rows[0].research_method == NEEDS_REVIEW
+    assert rows[0].research_subjects == NEEDS_REVIEW
+    assert rows[0].key_findings == NEEDS_REVIEW
+    assert rows[0].user_memo == ""
+    assert "DOI" in rows[0].verification_note
+
+
+def test_web_literature_matrix_view_keeps_review_notice_and_memo_column() -> None:
+    query = build_query("ai education")
+    result = SearchResult(records=[PaperRecord(title="AI education sample", doi=UNKNOWN)])
+
+    html = render_literature_matrix(query, result, session_id="session-1")
+
+    assert "선행연구 매트릭스 초안" in html
+    assert MATRIX_NOTICE in html
+    assert NEEDS_REVIEW in html
+    assert "사용자 메모" in html
