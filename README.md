@@ -68,6 +68,16 @@ Excluded: patent, news
 RISS / KCI / DBpia / KISS / e-Article 검색 링크가 별도 표시됩니다.
 ```
 
+## 샘플 검색 시나리오
+
+다음 5개 주제에 대한 실행 예시는 [docs/sample_search_scenarios.md](docs/sample_search_scenarios.md)에 정리되어 있습니다.
+
+1. `artificial intelligence education`
+2. `generative AI in elementary education`
+3. `digital literacy teacher education`
+4. `computational thinking primary school`
+5. `AI literacy curriculum`
+
 ## 웹 UI 실행
 
 ```powershell
