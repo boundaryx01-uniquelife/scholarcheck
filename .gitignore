@@ -4,3 +4,4 @@ __pycache__/
 outputs/*.csv
 outputs/*.json
 !.gitkeep
+data/domestic_manual_checks.json

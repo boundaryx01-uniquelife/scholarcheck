@@ -3,11 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from scholarcheck.domestic import build_domestic_links
-from scholarcheck.models import PaperRecord, SearchQuery, UNKNOWN
+from scholarcheck.checklist import build_citation_checklist
+from scholarcheck.manual_checks import add_manual_check, load_manual_checks
+from scholarcheck.models import DomesticManualCheck, PaperRecord, SearchQuery, UNKNOWN
 from scholarcheck.output import save_records
 from scholarcheck.pipeline import build_query, deduplicate, search_papers
 from scholarcheck.scoring import filter_and_score
 from scholarcheck.sources import CrossrefSource
+from scholarcheck.verification import verify_doi_with_crossref
 
 
 def test_missing_doi_is_not_generated() -> None:
@@ -105,3 +108,38 @@ def test_api_failure_does_not_create_fake_records(monkeypatch) -> None:
     assert result.records == []
     assert result.warnings
     assert any("가짜 결과는 생성하지 않았습니다" in item for item in result.relaxation_suggestions)
+
+
+def test_doi_verification_does_not_verify_missing_doi() -> None:
+    result = verify_doi_with_crossref(PaperRecord(title="No DOI"))
+
+    assert result.status == "missing"
+    assert result.doi == UNKNOWN
+
+
+def test_citation_checklist_marks_missing_pdf_as_needs_check() -> None:
+    checklist = build_citation_checklist(
+        PaperRecord(title="Checked title", doi="10.1000/example", pdf_available=False)
+    )
+
+    pdf_item = next(item for item in checklist if item.label == "PDF 직접 가능 여부")
+    assert pdf_item.status == "확인 필요"
+    assert "확인 불가" in pdf_item.detail
+
+
+def test_manual_domestic_check_is_saved_separately(tmp_path: Path) -> None:
+    path = tmp_path / "manual_checks.json"
+
+    add_manual_check(
+        DomesticManualCheck(
+            database_name="RISS",
+            search_keywords="인공지능 교육",
+            title="수동 확인 논문",
+        ),
+        path=path,
+    )
+    checks = load_manual_checks(path)
+
+    assert len(checks) == 1
+    assert checks[0].database_name == "RISS"
+    assert checks[0].title == "수동 확인 논문"

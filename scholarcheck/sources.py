@@ -226,6 +226,7 @@ class CrossrefSource:
             landing_page_url=landing_page_url,
             pdf_url=pdf_url,
             pdf_available=pdf_url != UNKNOWN,
+            open_access=True if pdf_url != UNKNOWN else None,
             abstract=abstract,
             citation_count=citation_count,
             source_api="Crossref",
@@ -286,6 +287,10 @@ class OpenAlexSource:
 
         abstract = _abstract_from_inverted_index(item.get("abstract_inverted_index"))
         citation_count = _int_or_none(item.get("cited_by_count"))
+        open_access = None
+        open_access_info = item.get("open_access")
+        if isinstance(open_access_info, dict) and isinstance(open_access_info.get("is_oa"), bool):
+            open_access = bool(open_access_info["is_oa"])
 
         verified_fields = ["title", "source_api"]
         for field_name, value in [
@@ -313,6 +318,7 @@ class OpenAlexSource:
             landing_page_url=landing_page_url,
             pdf_url=pdf_url,
             pdf_available=pdf_url != UNKNOWN,
+            open_access=open_access,
             abstract=abstract,
             citation_count=citation_count,
             source_api="OpenAlex",

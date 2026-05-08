@@ -31,6 +31,10 @@ ScholarCheck는 논문 존재 여부를 최종 보증하지 않습니다. 이 �
 - 로컬 웹 UI
 - CSV 또는 JSON 저장
 - 국내 DB 직접 확인용 검색 링크 생성: RISS, KCI, DBpia, KISS, e-Article
+- 검색 결과 상세 보기
+- DOI 재검증
+- 결과별 인용 전 체크리스트
+- 국내 DB 수동 확인 기록
 
 ## CLI 실행
 
@@ -75,6 +79,10 @@ python -m scholarcheck.web
 ```text
 http://127.0.0.1:8765
 ```
+
+웹 UI에서는 각 검색 결과의 `상세 보기` 링크를 통해 제목, 저자, 연도, DOI, 원문 URL, PDF URL, 오픈액세스 여부, 인용 수, 초록, 점수, notes, classic 후보 여부를 확인할 수 있습니다. 상세 화면의 `DOI 재검증`은 현재 DOI가 있을 때만 Crossref에서 다시 확인하며, DOI가 없으면 새 DOI를 만들지 않습니다.
+
+국내 DB 영역에는 수동 확인 기록 폼이 있습니다. 이 기록은 자동 검증 논문 목록에 섞이지 않고 `data/domestic_manual_checks.json`에 별도로 저장됩니다.
 
 포트를 바꾸려면:
 

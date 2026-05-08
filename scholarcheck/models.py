@@ -29,6 +29,7 @@ class PaperRecord:
     landing_page_url: str = UNKNOWN
     pdf_url: str = UNKNOWN
     pdf_available: bool = False
+    open_access: bool | None = None
     abstract: str = UNKNOWN
     citation_count: int | None = None
     region: str = UNKNOWN
@@ -60,6 +61,12 @@ class PaperRecord:
             return UNKNOWN
         return str(self.citation_count)
 
+    @property
+    def open_access_display(self) -> str:
+        if self.open_access is None:
+            return UNKNOWN
+        return "YES" if self.open_access else "NO"
+
 
 @dataclass(slots=True)
 class DomesticSearchLink:
@@ -77,3 +84,32 @@ class SearchResult:
     domestic_links: list[DomesticSearchLink] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     relaxation_suggestions: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class DoiVerificationResult:
+    status: str
+    message: str
+    doi: str = UNKNOWN
+    title: str = UNKNOWN
+    publisher: str = UNKNOWN
+    landing_page_url: str = UNKNOWN
+
+
+@dataclass(slots=True)
+class CitationChecklistItem:
+    label: str
+    status: str
+    detail: str
+
+
+@dataclass(slots=True)
+class DomesticManualCheck:
+    database_name: str
+    search_keywords: str
+    title: str
+    landing_page_url: str = UNKNOWN
+    doi: str = UNKNOWN
+    pdf_status: str = "확인 불가 / 기관접속 필요 가능성 있음"
+    notes: str = ""
+    checked_at: str = ""

@@ -6,9 +6,12 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlencode, urlparse
 
-from scholarcheck.models import DomesticSearchLink, PaperRecord, SearchQuery, UNKNOWN
+from scholarcheck.checklist import build_citation_checklist
+from scholarcheck.manual_checks import add_manual_check, load_manual_checks
+from scholarcheck.models import DomesticManualCheck, DomesticSearchLink, PaperRecord, SearchQuery, UNKNOWN
 from scholarcheck.output import records_to_csv, records_to_json
 from scholarcheck.pipeline import build_query, parse_keyword_argument, search_papers
+from scholarcheck.verification import verify_doi_with_crossref
 
 
 DEFAULT_HOST = "127.0.0.1"
@@ -16,7 +19,7 @@ DEFAULT_PORT = 8765
 
 
 class ScholarCheckHandler(BaseHTTPRequestHandler):
-    server_version = "ScholarCheckWeb/0.3"
+    server_version = "ScholarCheckWeb/0.4"
 
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
@@ -26,7 +29,37 @@ class ScholarCheckHandler(BaseHTTPRequestHandler):
         if parsed.path in {"/search", "/download.csv", "/download.json"}:
             self._handle_search_like(parsed)
             return
+        if parsed.path == "/detail":
+            self._handle_detail(parsed)
+            return
+        if parsed.path == "/verify-doi":
+            self._handle_verify_doi(parsed)
+            return
         self._send_html(render_not_found(), HTTPStatus.NOT_FOUND)
+
+    def do_POST(self) -> None:
+        parsed = urlparse(self.path)
+        if parsed.path != "/manual-check":
+            self._send_html(render_not_found(), HTTPStatus.NOT_FOUND)
+            return
+
+        length = int(self.headers.get("Content-Length", "0"))
+        body = self.rfile.read(length).decode("utf-8")
+        params = parse_qs(body)
+        add_manual_check(
+            DomesticManualCheck(
+                database_name=_first_param(params, "database_name"),
+                search_keywords=_first_param(params, "search_keywords"),
+                title=_first_param(params, "title"),
+                landing_page_url=_first_param(params, "landing_page_url") or UNKNOWN,
+                doi=_first_param(params, "doi") or UNKNOWN,
+                pdf_status=_first_param(params, "pdf_status")
+                or "확인 불가 / 기관접속 필요 가능성 있음",
+                notes=_first_param(params, "notes"),
+            )
+        )
+        redirect_to = _first_param(params, "redirect_to") or "/"
+        self._send_redirect(redirect_to)
 
     def _handle_search_like(self, parsed) -> None:
         params = parse_qs(parsed.query)
@@ -39,11 +72,18 @@ class ScholarCheckHandler(BaseHTTPRequestHandler):
         try:
             result = search_papers(query)
         except Exception as exc:
-            self._send_html(render_home(error=f"검색 중 오류가 발생했습니다: {exc}"), HTTPStatus.INTERNAL_SERVER_ERROR)
+            self._send_html(
+                render_home(error=f"검색 중 오류가 발생했습니다: {exc}"),
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+            )
             return
 
         if parsed.path == "/download.csv":
-            self._send_download(records_to_csv(result.records), "scholarcheck_results.csv", "text/csv; charset=utf-8")
+            self._send_download(
+                records_to_csv(result.records),
+                "scholarcheck_results.csv",
+                "text/csv; charset=utf-8",
+            )
             return
         if parsed.path == "/download.json":
             payload = records_to_json(
@@ -56,14 +96,37 @@ class ScholarCheckHandler(BaseHTTPRequestHandler):
 
         self._send_html(
             render_results(
-                query,
-                result.records,
-                result.domestic_links,
-                result.warnings,
-                result.relaxation_suggestions,
-                parsed.query,
+                query=query,
+                records=result.records,
+                domestic_links=result.domestic_links,
+                warnings=result.warnings,
+                suggestions=result.relaxation_suggestions,
+                raw_query=parsed.query,
+                manual_checks=load_manual_checks(),
             )
         )
+
+    def _handle_detail(self, parsed) -> None:
+        params = parse_qs(parsed.query)
+        query = _query_from_params(params)
+        index = _int_param(params, "index", default=0, minimum=0, maximum=999)
+        result = search_papers(query)
+        if index >= len(result.records):
+            self._send_html(render_not_found(), HTTPStatus.NOT_FOUND)
+            return
+        self._send_html(render_detail(query, result.records[index], index, parsed.query))
+
+    def _handle_verify_doi(self, parsed) -> None:
+        params = parse_qs(parsed.query)
+        query = _query_from_params(params)
+        index = _int_param(params, "index", default=0, minimum=0, maximum=999)
+        result = search_papers(query)
+        if index >= len(result.records):
+            self._send_html(render_not_found(), HTTPStatus.NOT_FOUND)
+            return
+        paper = result.records[index]
+        verification = verify_doi_with_crossref(paper)
+        self._send_html(render_detail(query, paper, index, parsed.query, verification_message=verification))
 
     def log_message(self, format: str, *args: object) -> None:
         return
@@ -85,6 +148,11 @@ class ScholarCheckHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(payload)
 
+    def _send_redirect(self, location: str) -> None:
+        self.send_response(HTTPStatus.SEE_OTHER.value)
+        self.send_header("Location", location)
+        self.end_headers()
+
 
 def render_home(error: str = "") -> str:
     return _page(
@@ -94,16 +162,16 @@ def render_home(error: str = "") -> str:
           <div class="inner">
             <p class="eyebrow">논문나침반 MVP</p>
             <h1>ScholarCheck</h1>
-            <p class="lead">API 응답 기준의 논문 메타데이터를 검수하고, 국내 DB 직접 확인 링크를 분리해서 보여줍니다.</p>
+            <p class="lead">API 응답 기준의 논문 메타데이터를 검수하고, 인용 전 확인 절차와 국내 DB 직접 확인 기록을 분리해서 관리합니다.</p>
             {_render_search_form(error=error)}
           </div>
         </section>
         <section class="inner notes">
           <h2>검증 원칙</h2>
           <ul>
-            <li>논문 존재 여부를 최종 보증하지 않으며 최종 인용 전 원문 페이지 확인이 필요합니다.</li>
-            <li>PDF 가능 여부는 API가 제공한 PDF URL 확인 여부 기준입니다.</li>
-            <li>국내 DB는 자동 크롤링하지 않고 직접 확인 링크만 제공합니다.</li>
+            <li>논문 존재 여부를 최종 보증하지 않습니다. 최종 인용 전 원문 페이지 확인이 필요합니다.</li>
+            <li>DOI, PDF, 초록, 오픈액세스 여부는 API가 제공한 값만 표시합니다.</li>
+            <li>국내 DB는 자동 검증 논문 목록에 섞지 않고 직접 확인 링크와 수동 기록만 제공합니다.</li>
           </ul>
         </section>
         """,
@@ -111,12 +179,14 @@ def render_home(error: str = "") -> str:
 
 
 def render_results(
+    *,
     query: SearchQuery,
     records: list[PaperRecord],
     domestic_links: list[DomesticSearchLink],
     warnings: list[str],
     suggestions: list[str],
     raw_query: str,
+    manual_checks: list[DomesticManualCheck],
 ) -> str:
     return _page(
         f"ScholarCheck - {_escape(query.topic)}",
@@ -144,21 +214,76 @@ def render_results(
           </div>
           <section class="result-section">
             <div class="section-title"><h2>자동 검증 논문 목록</h2><span>{len(records)}건</span></div>
-            {_render_records_table(records)}
+            {_render_records_table(records, raw_query)}
           </section>
           {_render_suggestions(suggestions)}
           <section class="result-section domestic">
             <div class="section-title"><h2>국내 DB 직접 확인 필요</h2><span>{len(domestic_links)}개 DB</span></div>
             <p class="section-note">국내 DB는 자동 검증 논문 목록에 포함하지 않습니다. 검색 결과와 원문 접근 권한은 각 DB에서 직접 확인해야 합니다.</p>
             {_render_domestic_table(domestic_links)}
+            {_render_manual_check_form(query, raw_query)}
+            {_render_manual_checks(manual_checks)}
           </section>
         </main>
         """,
     )
 
 
+def render_detail(
+    query: SearchQuery,
+    paper: PaperRecord,
+    index: int,
+    raw_query: str,
+    verification_message=None,
+) -> str:
+    checklist = build_citation_checklist(paper)
+    verify_query = _merge_query(raw_query, {"index": str(index)})
+    back_query = _strip_query_keys(raw_query, {"index"})
+    return _page(
+        f"ScholarCheck Detail - {_escape(paper.title)}",
+        f"""
+        <section class="search-band compact">
+          <div class="inner">
+            <p class="eyebrow">검색 결과 상세 보기</p>
+            <h1>{_escape(paper.title)}</h1>
+            <p><a href="/search?{_escape(back_query)}">검색 결과로 돌아가기</a></p>
+          </div>
+        </section>
+        <main class="inner results">
+          {render_verification_message(verification_message)}
+          <div class="download-actions">
+            <a class="button-link" href="/verify-doi?{_escape(verify_query)}">DOI 재검증</a>
+          </div>
+          <section class="result-section">
+            <h2>상세 정보</h2>
+            {_render_detail_table(paper)}
+          </section>
+          <section class="result-section">
+            <h2>인용 전 체크리스트</h2>
+            {_render_checklist(checklist)}
+          </section>
+        </main>
+        """,
+    )
+
+
+def render_verification_message(verification) -> str:
+    if verification is None:
+        return ""
+    return f"""
+    <section class="suggestions">
+      <h2>DOI 재검증 결과</h2>
+      <p><strong>{_escape(verification.status)}</strong>: {_escape(verification.message)}</p>
+      <p>DOI: {_escape(verification.doi)} / Crossref 제목: {_escape(verification.title)}</p>
+    </section>
+    """
+
+
 def render_not_found() -> str:
-    return _page("ScholarCheck - Not Found", '<section class="inner notes"><h1>페이지를 찾을 수 없습니다.</h1><p><a href="/">검색 화면으로 돌아가기</a></p></section>')
+    return _page(
+        "ScholarCheck - Not Found",
+        '<section class="inner notes"><h1>페이지를 찾을 수 없습니다.</h1><p><a href="/">검색 화면으로 돌아가기</a></p></section>',
+    )
 
 
 def _render_search_form(
@@ -192,6 +317,111 @@ def _render_search_form(
     """
 
 
+def _render_records_table(records: list[PaperRecord], raw_query: str) -> str:
+    if not records:
+        return '<p class="empty">결과 없음: 자동 검증된 논문을 찾지 못했습니다.</p>'
+
+    rows = []
+    for index, record in enumerate(records):
+        detail_query = _merge_query(raw_query, {"index": str(index)})
+        rows.append(
+            f"""
+            <tr>
+              <td><strong>{_escape(record.title)}</strong><span>{_escape(record.source_api)}</span></td>
+              <td>{_escape(record.authors_display)}</td>
+              <td>{_escape(record.year_display)}</td>
+              <td>{_doi_link(record.doi)}</td>
+              <td>{"가능" if record.pdf_available else "확인 불가"}</td>
+              <td>{_escape(record.open_access_display)}</td>
+              <td>{_escape(record.citation_display)}</td>
+              <td>{"고전 고인용" if record.classic_highly_cited else "-"}</td>
+              <td class="score">{record.total_score:.2f}</td>
+              <td><a href="/detail?{_escape(detail_query)}">상세 보기</a></td>
+            </tr>
+            """
+        )
+    return f"""
+    <div class="table-wrap"><table>
+      <thead><tr><th>논문 제목</th><th>저자</th><th>연도</th><th>DOI</th><th>PDF</th><th>OA</th><th>인용</th><th>고전</th><th>점수</th><th>상세</th></tr></thead>
+      <tbody>{''.join(rows)}</tbody>
+    </table></div>
+    """
+
+
+def _render_detail_table(paper: PaperRecord) -> str:
+    rows = [
+        ("제목", paper.title),
+        ("저자", paper.authors_display),
+        ("출판연도", paper.year_display),
+        ("출처", paper.source_api),
+        ("학술지", paper.venue),
+        ("DOI", paper.doi),
+        ("원문 URL", paper.landing_page_url),
+        ("PDF URL", paper.pdf_url),
+        ("다운로드 상태", "PDF 직접 가능" if paper.pdf_available else "확인 불가 / 기관접속 필요 가능성 있음"),
+        ("오픈액세스 여부", paper.open_access_display),
+        ("인용 수", paper.citation_display),
+        ("초록", paper.abstract),
+        ("관련성 점수", f"{paper.relevance_score:.2f}"),
+        ("최신성 점수", f"{paper.recency_score:.2f}"),
+        ("신뢰도 점수", f"{paper.usability_score:.2f}"),
+        ("최종 점수", f"{paper.total_score:.2f}"),
+        ("notes", "; ".join(paper.ranking_notes) or UNKNOWN),
+        ("classic_candidate 여부", "YES" if paper.classic_highly_cited else "NO"),
+    ]
+    body = "".join(f"<tr><th>{_escape(label)}</th><td>{_link_value(value)}</td></tr>" for label, value in rows)
+    return f'<div class="table-wrap detail"><table><tbody>{body}</tbody></table></div>'
+
+
+def _render_checklist(items) -> str:
+    rows = "".join(
+        f"<tr><td>{_escape(item.label)}</td><td>{_escape(item.status)}</td><td>{_escape(item.detail)}</td></tr>"
+        for item in items
+    )
+    return f'<div class="table-wrap"><table><thead><tr><th>항목</th><th>상태</th><th>내용</th></tr></thead><tbody>{rows}</tbody></table></div>'
+
+
+def _render_domestic_table(links: list[DomesticSearchLink]) -> str:
+    rows = [
+        f'<tr><td><strong>{_escape(link.database_name)}</strong></td><td>{_escape(link.search_keywords)}</td><td>{_escape(link.result_status)}</td><td>{_escape(link.download_status)}</td><td><a href="{_escape(link.search_url)}" target="_blank" rel="noreferrer">검색 링크 열기</a></td></tr>'
+        for link in links
+    ]
+    return f'<div class="table-wrap"><table><thead><tr><th>DB</th><th>검색어</th><th>상태</th><th>다운로드</th><th>링크</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
+
+
+def _render_manual_check_form(query: SearchQuery, raw_query: str) -> str:
+    return f"""
+    <section class="manual-form">
+      <h2>국내 DB 수동 확인 기록</h2>
+      <form method="post" action="/manual-check">
+        <input type="hidden" name="redirect_to" value="/search?{_escape(raw_query)}">
+        <div class="form-grid">
+          <label><span>DB명</span><input name="database_name" placeholder="RISS" required></label>
+          <label><span>검색어</span><input name="search_keywords" value="{_escape(' '.join(query.required_keywords or query.keywords))}" required></label>
+          <label><span>PDF 상태</span><input name="pdf_status" value="확인 불가 / 기관접속 필요 가능성 있음"></label>
+        </div>
+        <label><span>확인한 논문 제목</span><input name="title" required></label>
+        <div class="form-grid">
+          <label><span>원문 URL</span><input name="landing_page_url"></label>
+          <label><span>DOI</span><input name="doi"></label>
+          <label><span>메모</span><input name="notes"></label>
+        </div>
+        <button type="submit">수동 확인 기록 저장</button>
+      </form>
+    </section>
+    """
+
+
+def _render_manual_checks(checks: list[DomesticManualCheck]) -> str:
+    if not checks:
+        return '<p class="empty">아직 저장된 국내 DB 수동 확인 기록이 없습니다.</p>'
+    rows = "".join(
+        f"<tr><td>{_escape(check.database_name)}</td><td>{_escape(check.title)}</td><td>{_escape(check.doi)}</td><td>{_escape(check.pdf_status)}</td><td>{_escape(check.checked_at)}</td><td>{_escape(check.notes)}</td></tr>"
+        for check in reversed(checks[-20:])
+    )
+    return f'<div class="table-wrap"><table><thead><tr><th>DB</th><th>제목</th><th>DOI</th><th>PDF</th><th>확인일</th><th>메모</th></tr></thead><tbody>{rows}</tbody></table></div>'
+
+
 def _render_warnings(warnings: list[str]) -> str:
     if not warnings:
         return ""
@@ -204,46 +434,6 @@ def _render_suggestions(suggestions: list[str]) -> str:
     return f'<section class="suggestions"><h2>검색 조건 완화 제안</h2><ul>{"".join(f"<li>{_escape(s)}</li>" for s in suggestions)}</ul></section>'
 
 
-def _render_records_table(records: list[PaperRecord]) -> str:
-    if not records:
-        return '<p class="empty">결과 없음: 자동 검증된 논문을 찾지 못했습니다.</p>'
-
-    rows = []
-    for record in records:
-        rows.append(
-            f"""
-            <tr>
-              <td><strong>{_escape(record.title)}</strong><span>{_escape(record.source_api)}</span></td>
-              <td>{_escape(record.authors_display)}</td>
-              <td>{_escape(record.year_display)}</td>
-              <td>{_escape(record.venue)}</td>
-              <td>{_doi_link(record.doi)}</td>
-              <td>{_page_link(record.landing_page_url)}</td>
-              <td>{"가능" if record.pdf_available else "확인 불가"}</td>
-              <td>{_escape(record.citation_display)}</td>
-              <td>{"고전 고인용" if record.classic_highly_cited else "-"}</td>
-              <td class="score">{record.total_score:.2f}</td>
-              <td>{_escape("; ".join(record.ranking_notes) or "근거 없음")}</td>
-              <td>{_escape(record.caution)}</td>
-            </tr>
-            """
-        )
-    return f"""
-    <div class="table-wrap"><table>
-      <thead><tr><th>논문 제목</th><th>저자</th><th>연도</th><th>학술지/기관</th><th>DOI</th><th>원문</th><th>PDF</th><th>인용</th><th>고전</th><th>점수</th><th>정렬 근거</th><th>주의사항</th></tr></thead>
-      <tbody>{''.join(rows)}</tbody>
-    </table></div>
-    """
-
-
-def _render_domestic_table(links: list[DomesticSearchLink]) -> str:
-    rows = [
-        f'<tr><td><strong>{_escape(link.database_name)}</strong></td><td>{_escape(link.search_keywords)}</td><td>{_escape(link.result_status)}</td><td>{_escape(link.download_status)}</td><td><a href="{_escape(link.search_url)}" target="_blank" rel="noreferrer">검색 링크 열기</a></td></tr>'
-        for link in links
-    ]
-    return f'<div class="table-wrap"><table><thead><tr><th>DB</th><th>검색어</th><th>상태</th><th>다운로드</th><th>링크</th></tr></thead><tbody>{"".join(rows)}</tbody></table></div>'
-
-
 def _doi_link(doi: str) -> str:
     if doi == UNKNOWN:
         return UNKNOWN
@@ -254,6 +444,12 @@ def _page_link(url: str) -> str:
     if url == UNKNOWN:
         return UNKNOWN
     return f'<a href="{_escape(url)}" target="_blank" rel="noreferrer">열기</a>'
+
+
+def _link_value(value: str) -> str:
+    if value.startswith("http://") or value.startswith("https://"):
+        return _page_link(value)
+    return _escape(value)
 
 
 def _page(title: str, body: str) -> str:
@@ -274,21 +470,22 @@ def _page(title: str, body: str) -> str:
     .compact {{ padding:24px 0; }}
     .eyebrow {{ margin:0 0 4px; color:var(--accent-dark); font-weight:700; font-size:13px; }}
     h1 {{ margin:0 0 18px; font-size:34px; line-height:1.15; letter-spacing:0; }}
-    h2 {{ margin:0; font-size:20px; letter-spacing:0; }}
+    h2 {{ margin:0 0 10px; font-size:20px; letter-spacing:0; }}
     .lead {{ max-width:760px; color:var(--muted); }}
-    .search-form {{ display:grid; gap:14px; max-width:1040px; }}
+    .search-form,.manual-form form {{ display:grid; gap:14px; max-width:1040px; }}
     label span {{ display:block; margin-bottom:6px; color:var(--muted); font-size:13px; font-weight:700; }}
     input {{ width:100%; min-height:42px; border:1px solid var(--line); border-radius:6px; padding:9px 11px; font:inherit; }}
     .form-grid {{ display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }}
     button,.button-link {{ display:inline-flex; align-items:center; min-height:42px; border:0; border-radius:6px; padding:0 18px; color:#fff; background:var(--accent); font-weight:700; cursor:pointer; }}
     .button-link.secondary {{ background:#2f4858; }}
-    .download-actions {{ display:flex; gap:10px; margin-bottom:20px; }}
+    .download-actions {{ display:flex; flex-wrap:wrap; gap:10px; margin-bottom:20px; }}
     .notes,.results {{ padding:28px 0 44px; }}
-    .result-section {{ margin-top:26px; }}
+    .result-section,.manual-form {{ margin-top:26px; }}
     .section-title {{ display:flex; justify-content:space-between; gap:16px; margin-bottom:10px; }}
     .section-title span,.section-note,.empty {{ color:var(--muted); }}
-    .table-wrap {{ overflow-x:auto; border:1px solid var(--line); border-radius:6px; }}
-    table {{ width:100%; min-width:1120px; border-collapse:collapse; }}
+    .table-wrap {{ overflow-x:auto; border:1px solid var(--line); border-radius:6px; margin-top:10px; }}
+    table {{ width:100%; min-width:980px; border-collapse:collapse; }}
+    .detail table {{ min-width:720px; }}
     th,td {{ border-bottom:1px solid var(--line); padding:10px 12px; text-align:left; vertical-align:top; }}
     th {{ background:#eef2f6; font-size:13px; white-space:nowrap; }}
     td strong {{ display:block; min-width:250px; }}
@@ -301,7 +498,7 @@ def _page(title: str, body: str) -> str:
     .loading-note {{ display:none; color:var(--accent-dark); font-weight:700; }}
     body.loading .loading-note {{ display:block; }}
     body.loading button {{ opacity:.7; pointer-events:none; }}
-    @media (max-width:760px) {{ .form-grid {{ grid-template-columns:1fr; }} h1 {{ font-size:28px; }} .section-title {{ display:block; }} table {{ min-width:980px; }} }}
+    @media (max-width:760px) {{ .form-grid {{ grid-template-columns:1fr; }} h1 {{ font-size:28px; }} .section-title {{ display:block; }} table {{ min-width:860px; }} }}
   </style>
 </head>
 <body>{body}</body>
@@ -341,6 +538,20 @@ def _optional_int_param(params: dict[str, list[str]], name: str) -> int | None:
         return int(raw)
     except ValueError:
         return None
+
+
+def _merge_query(raw_query: str, updates: dict[str, str]) -> str:
+    params = parse_qs(raw_query, keep_blank_values=True)
+    for key, value in updates.items():
+        params[key] = [value]
+    return urlencode(params, doseq=True)
+
+
+def _strip_query_keys(raw_query: str, keys: set[str]) -> str:
+    params = parse_qs(raw_query, keep_blank_values=True)
+    for key in keys:
+        params.pop(key, None)
+    return urlencode(params, doseq=True)
 
 
 def _escape(value: object) -> str:
