@@ -110,7 +110,13 @@ sudo nginx -t
 sudo systemctl reload nginx
 ```
 
-`server_name example.com;`을 실제 도메인 또는 서버 IP로 바꿉니다.
+현재 Vultr 서버 IP는 다음 값으로 설정합니다.
+
+```text
+167.179.66.200
+```
+
+Nginx 템플릿의 기본값도 `server_name 167.179.66.200;`으로 맞춰져 있습니다. 나중에 도메인을 연결하면 이 값을 실제 도메인으로 바꿉니다.
 
 ## 5. HTTPS 적용
 
@@ -203,7 +209,7 @@ Nginx:
 
 ```bash
 sudo nginx -t
-curl -I http://your-domain.example/
+curl -I http://167.179.66.200/
 ```
 
 앱 기능:
